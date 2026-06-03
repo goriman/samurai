@@ -1308,6 +1308,7 @@
             cx: this.originX + localX * this.cellSize + this.cellSize / 2,
             cy: this.originY + localY * this.cellSize + this.cellSize / 2,
             requiredFill: this.requiredForMark(mark),
+            stage: this.stageForMark(mark),
             fillAmount,
             fill: clamp(fillAmount / this.requiredForMark(mark), 0, 1)
           });
@@ -1376,28 +1377,34 @@
       this.dirty = true;
     }
 
-    splatter(x, y, { heavy = false, critical = false, boss = false, rare = false, tier = 0, comboBonusBlood = 0, comboCount = 0 } = {}) {
-      if (this.complete || this.cells.length === 0) return { completed: false, cells: [] };
+    splatter(x, y, { heavy = false, critical = false, boss = false, rare = false, tier = 0, comboBonusBlood = 0, comboCount = 0, source = "kill" } = {}) {
+      if (this.complete || this.cells.length === 0) return { completed: false, cells: [], bloodUnits: 0, changedCount: 0 };
       const isComboBonus = comboBonusBlood > 0;
+      const bloodSource = isComboBonus ? "combo" : boss ? "boss" : critical ? "critical" : source;
       const radius = isComboBonus
         ? 132 + Math.min(210, comboCount * 3)
         : 80 + (heavy ? 58 : 0) + (critical ? 42 : 0) + (boss ? 72 : 0);
       const maxCells = isComboBonus
         ? Math.min(14, 4 + Math.floor(Math.sqrt(comboCount)) + Math.floor(comboBonusBlood / 14))
-        : boss ? 12 : heavy ? 7 : critical ? 5 : rare ? 4 : 2;
+        : boss ? 16 : heavy ? 9 : critical ? 7 : rare ? 6 : Math.max(2, 2 + Math.floor(Math.max(0, tier) / 2));
       const bloodUnits = isComboBonus
         ? comboBonusBlood
-        : boss ? 44 + (critical ? 18 : 0) : heavy ? 16 : rare ? 7 : 2 + Math.floor(Math.max(0, tier) / 2) + (critical ? 3 : 0);
+        : boss ? 52 + Math.max(0, tier) * 6 + (critical ? 24 : 0)
+          : heavy ? 18 + Math.max(0, tier) * 4 + (critical ? 8 : 0)
+            : rare ? 14 + Math.max(0, tier) * 3
+              : 2 + Math.max(0, tier) + (critical ? 4 : 0);
       const candidates = [];
+      const endgamePull = this.progressValue > 0.82;
       for (const cell of this.unfinished) {
         const dist = distance(x, y, cell.cx, cell.cy);
-        if (dist <= radius) candidates.push({ cell, dist, score: this.cellScore(cell, dist) });
+        const effectiveDist = endgamePull ? dist * 0.35 : dist;
+        if (endgamePull || dist <= radius) candidates.push({ cell, dist: effectiveDist, score: this.cellScore(cell, effectiveDist, bloodSource) });
       }
       if (candidates.length === 0) {
         let nearest = null;
         for (const cell of this.unfinished) {
           const dist = distance(x, y, cell.cx, cell.cy);
-          if (!nearest || dist < nearest.dist) nearest = { cell, dist, score: this.cellScore(cell, dist) };
+          if (!nearest || dist < nearest.dist) nearest = { cell, dist, score: this.cellScore(cell, dist, bloodSource) };
         }
         if (nearest) candidates.push(nearest);
       }
@@ -1422,11 +1429,11 @@
           remaining -= 1;
         }
         index += 1;
-        if (index > selected.length * this.requiredFill * 2) break;
+        if (index > selected.length * 10) break;
       }
       const wasComplete = this.complete;
       this.refreshCompletion();
-      return { completed: !wasComplete && this.complete, cells: changed };
+      return { completed: !wasComplete && this.complete, cells: changed, bloodUnits, changedCount: changed.length };
     }
 
     requiredForMark(mark) {
@@ -1436,10 +1443,24 @@
       return this.requiredFill;
     }
 
-    cellScore(cell, dist) {
+    stageForMark(mark) {
+      if (mark === "O") return 0;
+      if (mark === "S") return 1;
+      if (mark === "M") return 2;
+      if (mark === "H" || mark === "A") return 3;
+      return 2;
+    }
+
+    cellScore(cell, dist, source = "kill") {
       let score = dist;
-      if (cell.mark === "H" || cell.mark === "A") score -= 28;
-      if (cell.mark === "O" || cell.mark === "S") score -= 12;
+      const progress = this.progressValue;
+      const targetStage = progress < 0.25 ? 0 : progress < 0.55 ? 1 : progress < 0.82 ? 2 : 3;
+      score += Math.abs(cell.stage - targetStage) * 34;
+      if (source === "combo" && this.hasFilledNeighbor(cell)) score -= 42;
+      if (source === "boss" && (cell.mark === "M" || cell.mark === "S")) score -= 26;
+      if (source === "critical" && (cell.mark === "H" || cell.mark === "A")) score -= 38;
+      if (cell.mark === "H" || cell.mark === "A") score -= progress > 0.68 || source === "critical" ? 28 : 4;
+      if (cell.mark === "O" || cell.mark === "S") score -= progress < 0.55 ? 18 : 8;
       if (cell.mark === "M") score -= 4;
       if (cell.fillAmount > 0) score -= 18;
       if (this.hasFilledNeighbor(cell)) score -= 22;
@@ -1489,18 +1510,19 @@
         const lx = cell.col * this.cellSize;
         const ly = cell.row * this.cellSize;
         if (fill <= 0) {
-          ctx.fillStyle = nearing ? BLOOD_DARK : LIGHT_ORANGE;
-          const size = Math.max(2, Math.floor(this.cellSize * (cell.mark === "H" ? 0.34 : 0.2)));
+          if (this.progressValue < 0.28) continue;
+          ctx.fillStyle = this.progressValue > 0.85 ? (nearing ? BLOOD_WET : BLOOD_DARK) : LIGHT_ORANGE;
+          const alphaSize = this.progressValue > 0.75 ? 0.34 : 0.18;
+          const size = Math.max(2, Math.floor(this.cellSize * (cell.mark === "H" ? alphaSize + 0.08 : alphaSize)));
           rect(ctx, lx + this.cellSize / 2 - size / 2, ly + this.cellSize / 2 - size / 2, size, size);
           continue;
         }
-        const inset = Math.max(1, Math.round(this.cellSize * (0.42 - fill * 0.28)));
         ctx.fillStyle = pulse && fill >= 1 ? BLOOD_BRIGHT : this.bloodTone(cell, fill, false);
-        rect(ctx, lx + inset, ly + inset, this.cellSize - inset * 2, this.cellSize - inset * 2);
+        this.drawBloodCell(ctx, lx, ly, cell, fill);
         if (fill >= 0.5) {
           ctx.fillStyle = this.bloodTone(cell, Math.min(1, fill + 0.18), false);
           const innerInset = Math.max(1, Math.floor(this.cellSize * 0.18));
-          rect(ctx, lx + inset + innerInset, ly + inset + innerInset, Math.max(2, this.cellSize - inset * 2 - innerInset * 2), Math.max(2, this.cellSize - inset * 2 - innerInset * 2));
+          rect(ctx, lx + innerInset * 2, ly + innerInset * 2, Math.max(2, this.cellSize - innerInset * 4), Math.max(2, this.cellSize - innerInset * 4));
         }
         if (fill < 1) {
           ctx.fillStyle = BLACK;
@@ -1510,6 +1532,23 @@
       }
       this.dirty = false;
       this.nextBlinkRedraw = this.complete ? now + 180 : this.progressValue > 0.85 ? now + 360 : 0;
+    }
+
+    drawBloodCell(ctx, lx, ly, cell, fill) {
+      const inset = Math.max(1, Math.round(this.cellSize * (0.42 - fill * 0.28)));
+      const w = Math.max(2, this.cellSize - inset * 2);
+      const h = Math.max(2, this.cellSize - inset * 2);
+      if (fill < 0.34) {
+        rect(ctx, lx + this.cellSize * 0.42, ly + this.cellSize * 0.42, Math.max(2, w * 0.35), Math.max(2, h * 0.35));
+        return;
+      }
+      if (fill < 0.75) {
+        rect(ctx, lx + inset, ly + inset + 1, w, Math.max(2, h - 2));
+        rect(ctx, lx + inset + 1, ly + inset, Math.max(2, w - 2), h);
+        return;
+      }
+      rect(ctx, lx + inset, ly + inset, w, h);
+      rect(ctx, lx + inset - 1, ly + inset + 1, w + 2, Math.max(2, h - 2));
     }
 
     bloodTone(cell, fill, preview = false) {
@@ -1534,13 +1573,15 @@
       this.maxSplats = 90;
     }
 
-    spawnKillBlood(game, enemy, { heavy = false, critical = false } = {}) {
-      const result = game.bloodGoal.splatter(enemy.x, enemy.y, { heavy, critical });
+    spawnKillBlood(game, enemy, { heavy = false, critical = false, boss = false, rare = false, tier = 0 } = {}) {
+      const result = game.bloodGoal.splatter(enemy.x, enemy.y, { heavy, critical, boss, rare, tier, source: boss ? "boss" : critical ? "critical" : "kill" });
       const targetCells = result.cells || [];
-      const trailLimit = Math.min(targetCells.length, critical ? 7 : heavy ? 5 : 3);
+      const bloodPower = result.bloodUnits || 2;
+      const trailLimit = Math.min(targetCells.length, boss ? 12 : critical ? 9 : heavy ? 7 : Math.max(3, Math.ceil(bloodPower / 3)));
+      const trailSize = boss ? 7 : critical ? 6 : heavy ? 5 : 3 + Math.min(3, Math.floor(bloodPower / 6));
       for (let i = 0; i < trailLimit; i += 1) {
         const cell = targetCells[i];
-        const life = 0.36 + Math.random() * 0.16;
+        const life = (boss ? 0.54 : 0.36) + Math.random() * 0.18;
         if (this.trails.length >= this.maxTrails) this.trails.shift();
         this.trails.push({
           x: enemy.x,
@@ -1550,13 +1591,13 @@
           bend: (Math.random() - 0.5) * 42,
           life,
           maxLife: life,
-          size: critical ? 5 : heavy ? 4 : 3
+          size: trailSize
         });
       }
-      const strayCount = Math.min(critical ? 14 : heavy ? 10 : 6, this.maxSplats - this.splats.length);
+      const strayCount = Math.min(boss ? 22 : critical ? 16 : heavy ? 12 : rare ? 10 : 6 + Math.floor(bloodPower / 4), this.maxSplats - this.splats.length);
       for (let i = 0; i < strayCount; i += 1) {
         const angle = Math.random() * FULL_SPIN;
-        const speed = 40 + Math.random() * (critical ? 170 : 105);
+        const speed = 40 + Math.random() * (boss ? 220 : critical ? 170 : 105);
         const life = 0.34 + Math.random() * 0.25;
         if (this.splats.length >= this.maxSplats) this.splats.shift();
         this.splats.push({
@@ -1566,16 +1607,16 @@
           vy: Math.sin(angle) * speed,
           life,
           maxLife: life,
-          size: 2 + Math.floor(Math.random() * (critical ? 4 : 3))
+          size: 2 + Math.floor(Math.random() * (boss ? 6 : critical ? 4 : 3))
         });
       }
-      if (targetCells.length > 0) game.sfx.queueAbsorb(Math.min(4, targetCells.length), 2 + targetCells.length);
-      return result.completed;
+      if (targetCells.length > 0) game.sfx.queueAbsorb(Math.min(boss ? 7 : 4, targetCells.length), 2 + targetCells.length + Math.floor(bloodPower / 8));
+      return result;
     }
 
     spawnComboBonusBlood(game, origin, comboCount, bonusBlood) {
       if (!bonusBlood || bonusBlood <= 0 || game.bloodGoal.complete) return false;
-      const result = game.bloodGoal.splatter(origin.x, origin.y, { comboBonusBlood: bonusBlood, comboCount });
+      const result = game.bloodGoal.splatter(origin.x, origin.y, { comboBonusBlood: bonusBlood, comboCount, source: "combo" });
       const targetCells = result.cells || [];
       const trailLimit = Math.min(targetCells.length, 8);
       for (let i = 0; i < trailLimit; i += 1) {
@@ -4595,8 +4636,8 @@
       this.effects.push({ x: this.player.x, y: this.player.y, life: 0.18, size: effectSize });
     }
 
-    showObjectiveGain(x, y, delta, strong = false) {
-      this.objectivePulse = Math.max(this.objectivePulse, strong ? 0.72 : 0.48);
+    showObjectiveGain(x, y, delta, strong = false, label = "血紋") {
+      this.objectivePulse = Math.max(this.objectivePulse, strong ? 0.92 : 0.48);
       const pct = Math.max(1, Math.round(delta * 100));
       this.effects.push({
         type: "objectivePop",
@@ -4604,7 +4645,7 @@
         y: y - (strong ? 48 : 38),
         life: strong ? 0.76 : 0.54,
         maxLife: strong ? 0.76 : 0.54,
-        text: `血紋 +${pct}%`,
+        text: `${label} +${pct}%`,
         strong
       });
     }
@@ -4684,9 +4725,14 @@
         critical: criticalKill
       });
       const progressBefore = this.bloodGoal ? this.bloodGoal.progress() : 0;
-      const completedByBlood = this.bloodManager.spawnKillBlood(this, enemy, { heavy, critical: criticalKill, boss: bossBlood, rare: rareBlood, tier: enemy.tier || 0 });
+      const bloodResult = this.bloodManager.spawnKillBlood(this, enemy, { heavy, critical: criticalKill, boss: bossBlood, rare: rareBlood, tier: enemy.tier || 0 });
+      const completedByBlood = !!bloodResult.completed;
       const progressAfter = this.bloodGoal ? this.bloodGoal.progress() : progressBefore;
-      if (progressAfter > progressBefore) this.showObjectiveGain(enemy.x, enemy.y, progressAfter - progressBefore, heavy || criticalKill);
+      if (progressAfter > progressBefore) {
+        const label = bossBlood ? "大血流" : criticalKill ? "会心血" : heavy ? "濃血" : rareBlood ? "異血" : "血紋";
+        this.showObjectiveGain(enemy.x, enemy.y, progressAfter - progressBefore, heavy || criticalKill || bossBlood, label);
+        if (bossBlood) this.objectivePulse = Math.max(this.objectivePulse, 1.35);
+      }
       if (completedByBlood) this.clearGame();
       if (criticalKill) this.applyCriticalKillExplosion(enemy, dir);
       if (!this.gameCleared) this.screenShake.add((heavy ? 7 : 3) + Math.min(7, combo * 0.65) + (criticalKill ? 4 : 0), heavy ? 0.18 : 0.11);
@@ -5687,6 +5733,17 @@
       game.effectManager.bossDismember(mid.x, mid.y, { x: 1, y: 0 }, "weaponMain", 1.05);
       game.effectManager.bossDismember(boss.x, boss.y, { x: -1, y: 0 }, "horn", 1.55);
       game.effects.push({ type: "bossBreakPop", x: boss.x, y: boss.y - boss.radius - 28, life: 0.92, maxLife: 0.92, text: "角破壊" });
+    } else if (params.get("demo") === "bloodseal") {
+      game.guideDismissed = true;
+      game.noticeTimer = 0;
+      game.enemies = [];
+      const boss = new Enemy("levelBoss", game.player.x + 80, game.player.y - 20, 3, game.level);
+      boss.tier = 4;
+      const before = game.bloodGoal.progress();
+      const result = game.bloodManager.spawnKillBlood(game, boss, { heavy: true, critical: true, boss: true, tier: 4 });
+      const after = game.bloodGoal.progress();
+      if (after > before) game.showObjectiveGain(boss.x, boss.y, after - before, true, "大血流");
+      if (result.completed) game.clearGame();
     }
   });
 })();
