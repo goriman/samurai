@@ -241,7 +241,7 @@
       speed: 30,
       damage: 13,
       radius: 18,
-      xp: 40,
+      xp: 24,
       contactRange: 18,
       attackRange: 42,
       attackCooldown: 1.35,
@@ -254,7 +254,7 @@
       speed: 38,
       damage: 10,
       radius: 17,
-      xp: 38,
+      xp: 22,
       contactRange: 16,
       attackRange: 150,
       attackCooldown: 1.1,
@@ -267,7 +267,7 @@
       speed: 28,
       damage: 18,
       radius: 24,
-      xp: 90,
+      xp: 45,
       contactRange: 22,
       attackRange: 56,
       attackCooldown: 1.15,
@@ -280,7 +280,7 @@
       speed: 82,
       damage: 9,
       radius: 8,
-      xp: 18,
+      xp: 14,
       contactRange: 12,
       attackRange: 20,
       attackCooldown: 0.95,
@@ -819,17 +819,18 @@
 
     bossDismember(x, y, dir, part, scale = 1) {
       const side = { x: -dir.y, y: dir.x };
-      const count = Math.floor(34 * scale);
+      const weaponBreak = part && part.startsWith("weapon");
+      const count = Math.floor((weaponBreak ? 18 : 34) * scale);
       for (let i = 0; i < count; i += 1) {
-        const angle = Math.atan2(dir.y, dir.x) + (Math.random() - 0.5) * 2.8;
-        const speed = 130 + Math.random() * 310 * scale;
+        const angle = weaponBreak ? Math.PI / 2 + (Math.random() - 0.5) * 0.55 : Math.atan2(dir.y, dir.x) + (Math.random() - 0.5) * 2.8;
+        const speed = weaponBreak ? 70 + Math.random() * 145 * scale : 130 + Math.random() * 310 * scale;
         const size = i % 3 === 0 ? 5 : 3;
         this.particle(
-          x + side.x * (Math.random() - 0.5) * 18 * scale,
-          y + side.y * (Math.random() - 0.5) * 18 * scale,
-          Math.cos(angle) * speed + side.x * (Math.random() - 0.5) * 170,
-          Math.sin(angle) * speed + side.y * (Math.random() - 0.5) * 170,
-          0.24 + Math.random() * 0.42,
+          x + side.x * (Math.random() - 0.5) * (weaponBreak ? 10 : 18) * scale,
+          y + side.y * (Math.random() - 0.5) * (weaponBreak ? 10 : 18) * scale,
+          Math.cos(angle) * speed + side.x * (Math.random() - 0.5) * (weaponBreak ? 70 : 170),
+          Math.sin(angle) * speed + (weaponBreak ? 70 : side.y * (Math.random() - 0.5) * 170),
+          weaponBreak ? 0.18 + Math.random() * 0.26 : 0.24 + Math.random() * 0.42,
           size,
           90,
           4.2
@@ -971,26 +972,47 @@
       } else if (burst.type === "bossDismember") {
         const dir = burst.dir;
         const side = { x: -dir.y, y: dir.x };
-        const size = burst.size * (0.45 + grow * 1.35);
-        ctx.fillStyle = BLOOD_BRIGHT;
-        thickLinePixels(ctx, burst.x - side.x * size * 0.78 - dir.x * size * 0.32, burst.y - side.y * size * 0.78 - dir.y * size * 0.32, burst.x + side.x * size * 0.78 + dir.x * size * 0.44, burst.y + side.y * size * 0.78 + dir.y * size * 0.44, 5);
+        const weaponBreak = burst.part && burst.part.startsWith("weapon");
+        const size = burst.size * (0.42 + t * 0.72);
+        const drop = (1 - t) * burst.size * 0.42;
         ctx.fillStyle = ORANGE;
-        rect(ctx, burst.x - size, burst.y - size, size * 2, 3);
-        rect(ctx, burst.x - size, burst.y + size, size * 2, 3);
-        rect(ctx, burst.x - size, burst.y - size, 3, size * 2);
-        rect(ctx, burst.x + size, burst.y - size, 3, size * 2);
-        for (let i = 0; i < 10; i += 1) {
-          const angle = FULL_SPIN * i / 10 + grow * 1.6;
-          rect(ctx, burst.x + Math.cos(angle) * size * 0.82 - 3, burst.y + Math.sin(angle) * size * 0.82 - 3, 6, 6);
+        if (weaponBreak) {
+          const shardLength = burst.size * (0.22 + t * 0.46);
+          const fall = (1 - t) * burst.size * 0.85;
+          const baseX = burst.x + dir.x * burst.size * 0.18;
+          const baseY = burst.y + fall;
+          thickLinePixels(ctx, baseX - side.x * shardLength * 0.45, baseY - side.y * shardLength * 0.45, baseX + side.x * shardLength * 0.45, baseY + side.y * shardLength * 0.45, Math.max(2, 4 * t));
+          thickLinePixels(ctx, baseX - dir.x * shardLength * 0.38, baseY - dir.y * shardLength * 0.38, baseX + dir.x * shardLength * 0.26, baseY + dir.y * shardLength * 0.26, Math.max(2, 3 * t));
+          ctx.fillStyle = LIGHT_ORANGE;
+          for (let i = 0; i < 5; i += 1) {
+            const offset = (i - 2) * burst.size * 0.08;
+            const shardSize = Math.max(1, Math.round((3 - Math.abs(i - 2) * 0.4) * t));
+            rect(ctx, baseX + side.x * offset - shardSize / 2, baseY + fall * 0.25 + i * 2 - shardSize / 2, shardSize, shardSize);
+          }
+          return;
+        }
+        thickLinePixels(ctx, burst.x - side.x * size * 0.62 - dir.x * size * 0.28, burst.y - side.y * size * 0.62 - dir.y * size * 0.28, burst.x + side.x * size * 0.62 + dir.x * size * 0.34, burst.y + side.y * size * 0.62 + dir.y * size * 0.34, Math.max(2, 5 * t));
+        thickLinePixels(ctx, burst.x - dir.x * size * 0.58 + side.x * size * 0.18, burst.y - dir.y * size * 0.58 + side.y * size * 0.18, burst.x + dir.x * size * 0.5 - side.x * size * 0.16, burst.y + dir.y * size * 0.5 - side.y * size * 0.16, Math.max(2, 3 * t));
+        ctx.fillStyle = LIGHT_ORANGE;
+        for (let i = 0; i < 8; i += 1) {
+          const angle = FULL_SPIN * i / 8 + 0.35;
+          const distanceOut = burst.size * (0.3 + (1 - t) * 0.72);
+          const shardSize = Math.max(1, Math.round(4 * t));
+          const sx = burst.x + Math.cos(angle) * distanceOut + dir.x * (1 - t) * burst.size * 0.28;
+          const sy = burst.y + Math.sin(angle) * distanceOut + drop;
+          linePixels(ctx, burst.x + Math.cos(angle) * size * 0.16, burst.y + Math.sin(angle) * size * 0.16, sx, sy);
+          rect(ctx, sx - shardSize / 2, sy - shardSize / 2, shardSize, shardSize);
         }
       } else if (burst.type === "bossDismemberText") {
         const label = bossPartLabel(burst.part);
-        ctx.fillStyle = BLOOD_BRIGHT;
-        ctx.font = `${Math.round(20 * burst.size + grow * 6)}px Courier New, monospace`;
-        ctx.fillText(`${label}破壊`, burst.x - label.length * 10 - 20, burst.y - grow * 24);
         ctx.fillStyle = ORANGE;
-        ctx.font = `${Math.round(13 * burst.size)}px Courier New, monospace`;
-        ctx.fillText("攻撃弱体", burst.x - 34, burst.y + 28 - grow * 24);
+        ctx.font = `${Math.round((17 + t * 3) * burst.size)}px Courier New, monospace`;
+        ctx.fillText(`${label}破壊`, burst.x - label.length * 9 - 18, burst.y - (1 - t) * 12);
+        if (burst.size >= 1.3) {
+          ctx.fillStyle = LIGHT_ORANGE;
+          ctx.font = `${Math.round(12 * burst.size)}px Courier New, monospace`;
+          ctx.fillText("弱体", burst.x - 18, burst.y + 26 - (1 - t) * 12);
+        }
       } else if (burst.type === "wallImpact") {
         const size = burst.size * (0.4 + grow);
         const normal = burst.normal;
@@ -1168,18 +1190,22 @@
     dropEnemyLoot(enemy) {
       this.dropExperience(enemy.x, enemy.y, enemy.def.xp);
       if (enemy.type === "levelBoss") {
+        this.game.addAttributePity(100, enemy.x, enemy.y);
         this.dropBonusRewards(enemy.x, enemy.y, 2);
         return;
       }
       if (enemy.type === "midBoss" || enemy.type === "midBossArcher") {
+        this.game.addAttributePity(50, enemy.x, enemy.y);
         if (Math.random() < this.midBossBonusChance) this.dropBonusRewards(enemy.x, enemy.y, 1);
         return;
       }
       if (enemy.type === "blinkNinja") {
-        this.dropAttribute(enemy.x, enemy.y);
+        this.game.addAttributePity(100, enemy.x, enemy.y);
+        this.dropAttribute(enemy.x, enemy.y, true);
         if (enemy.tier >= 3 && Math.random() < 0.38 + enemy.tier * 0.06) this.dropBonusRewards(enemy.x, enemy.y, 1);
         return;
       }
+      this.game.addAttributePity(enemy.tier >= 2 ? 2 : 1, enemy.x, enemy.y);
       this.dropNormalItem(enemy.x, enemy.y);
     }
 
@@ -1204,10 +1230,11 @@
       this.game.effects.push({ type: "rareDrop", x, y, life: 0.9, maxLife: 0.9, size: 38 + count * 8 });
     }
 
-    dropAttribute(x, y) {
-      const kind = ELEMENT_ITEMS[Math.floor(Math.random() * ELEMENT_ITEMS.length)];
+    dropAttribute(x, y, guaranteed = false) {
+      const kind = this.game.chooseAttributeKind ? this.game.chooseAttributeKind() : ELEMENT_ITEMS[Math.floor(Math.random() * ELEMENT_ITEMS.length)];
+      if (this.game.rememberAttribute) this.game.rememberAttribute(kind);
       this.game.items.push(new Item(kind, x, y));
-      this.game.effects.push({ type: "rareDrop", x, y, life: 0.9, maxLife: 0.9, size: 34 });
+      this.game.effects.push({ type: "rareDrop", x, y, life: guaranteed ? 1.05 : 0.9, maxLife: guaranteed ? 1.05 : 0.9, size: guaranteed ? 44 : 34 });
     }
 
     dropConsumable(x, y) {
@@ -1756,6 +1783,14 @@
     return Math.floor(Math.min(COMBO_BLOOD_BONUS.max, raw));
   }
 
+  function calculateXpToNext(level) {
+    return Math.floor(8 + level * 4 + Math.pow(level, 1.35) * 1.8);
+  }
+
+  function isAttributeGuaranteeLevel(level) {
+    return level === 3 || level === 6 || level === 9 || level === 12 || level === 15 || level === 20 || (level > 20 && (level - 20) % 4 === 0);
+  }
+
   function isBossType(type) {
     return type === "midBoss" || type === "midBossArcher" || type === "levelBoss";
   }
@@ -1784,7 +1819,7 @@
   function itemNotice(kind) {
     const labels = {
       heal: "回復",
-      speed: "移動速度強化",
+      speed: "足さばき",
       fire: "炎属性",
       ice: "氷属性",
       lightning: "雷属性",
@@ -2043,20 +2078,20 @@
       this.katana.update(dt, game);
     }
 
-    upgradeAttackSpeed() {
-      this.attackInterval = Math.max(0.24, this.attackInterval - 0.12);
-      this.katana.verticalPixels += 4;
+    upgradeAttackSpeed(major = false) {
+      this.attackInterval = Math.max(0.34, this.attackInterval - (major ? 0.065 : 0.045));
+      this.katana.verticalPixels += major ? 3 : 2;
       return "SPEED";
     }
 
-    upgradeAttackPower() {
+    upgradeAttackPower(major = false) {
       if (Math.random() < 0.5) {
-        this.katana.horizontalPixels += 10;
-        this.katana.pierceLimit += 2;
+        this.katana.horizontalPixels += major ? 8 : 5;
+        if (major || Math.random() < 0.35) this.katana.pierceLimit += 1;
         return "LONG";
       }
-      this.knockbackPower += 110;
-      this.katana.verticalPixels += 8;
+      this.knockbackPower += major ? 60 : 35;
+      this.katana.verticalPixels += major ? 6 : 4;
       return "THICK";
     }
 
@@ -2937,11 +2972,19 @@
         if (Math.sin(this.walkPhase) > 0.6) rect(ctx, x - 11, y + 10, 22, 2);
       } else if (this.def.weapon === "boss") {
         const bossSwing = Math.sin(this.walkPhase * 0.9) * 8;
-        const spearLen = this.parts.weaponMain === false ? 24 : 38;
-        const swordLen = this.parts.weaponSub === false ? 12 : 24;
-        linePixels(ctx, x + dir.x * 8, y - 5 + dir.y * 8, x + dir.x * spearLen - dir.y * bossSwing, y - 5 + dir.y * spearLen + dir.x * bossSwing);
-        if (this.parts.weaponMain !== false) rect(ctx, x + dir.x * (spearLen + 3) - dir.y * bossSwing - 2, y - 6 + dir.y * (spearLen + 3) + dir.x * bossSwing, 5, 5);
-        linePixels(ctx, x - dir.x * 7, y - 2 - dir.y * 7, x - dir.x * swordLen + dir.y * bossSwing, y - 2 - dir.y * swordLen - dir.x * bossSwing);
+        const spearLen = 38;
+        const swordLen = 24;
+        if (this.parts.weaponMain !== false) {
+          linePixels(ctx, x + dir.x * 8, y - 5 + dir.y * 8, x + dir.x * spearLen - dir.y * bossSwing, y - 5 + dir.y * spearLen + dir.x * bossSwing);
+          rect(ctx, x + dir.x * (spearLen + 3) - dir.y * bossSwing - 2, y - 6 + dir.y * (spearLen + 3) + dir.x * bossSwing, 5, 5);
+        } else {
+          rect(ctx, x + dir.x * 8 - 3, y - 5 + dir.y * 8 - 1, 7, 2);
+        }
+        if (this.parts.weaponSub !== false) {
+          linePixels(ctx, x - dir.x * 7, y - 2 - dir.y * 7, x - dir.x * swordLen + dir.y * bossSwing, y - 2 - dir.y * swordLen - dir.x * bossSwing);
+        } else {
+          rect(ctx, x - dir.x * 7 - 3, y - 2 - dir.y * 7 - 1, 7, 2);
+        }
         rect(ctx, x - 13, y - 20, 26, 3);
         rect(ctx, x - 10, y + 10, 20, 3);
         rect(ctx, x - 16, y - 16, 5, 10);
@@ -2966,11 +3009,19 @@
         if (this.parts.head === false) rect(ctx, x - 7, y - 21, 14, 2);
       } else if (this.def.weapon === "levelBoss") {
         const bossSwing = Math.sin(this.walkPhase * 0.75) * (10 + this.rank * 2);
-        const mainLen = (this.parts.weaponMain === false ? 34 : 52) + this.rank * 6;
-        const subLen = (this.parts.weaponSub === false ? 18 : 34) + this.rank * 4;
-        thickLinePixels(ctx, x + dir.x * 12, y - 8 + dir.y * 12, x + dir.x * mainLen - dir.y * bossSwing, y - 8 + dir.y * mainLen + dir.x * bossSwing, 5);
-        if (this.parts.weaponMain !== false) rect(ctx, x + dir.x * (mainLen + 6) - dir.y * bossSwing - 5, y - 12 + dir.y * (mainLen + 6) + dir.x * bossSwing, 10, 10);
-        thickLinePixels(ctx, x - dir.x * 10, y - 5 - dir.y * 10, x - dir.x * subLen + dir.y * bossSwing, y - 5 - dir.y * subLen - dir.x * bossSwing, 4);
+        const mainLen = 52 + this.rank * 6;
+        const subLen = 34 + this.rank * 4;
+        if (this.parts.weaponMain !== false) {
+          thickLinePixels(ctx, x + dir.x * 12, y - 8 + dir.y * 12, x + dir.x * mainLen - dir.y * bossSwing, y - 8 + dir.y * mainLen + dir.x * bossSwing, 5);
+          rect(ctx, x + dir.x * (mainLen + 6) - dir.y * bossSwing - 5, y - 12 + dir.y * (mainLen + 6) + dir.x * bossSwing, 10, 10);
+        } else {
+          rect(ctx, x + dir.x * 12 - 5, y - 8 + dir.y * 12 - 2, 10, 4);
+        }
+        if (this.parts.weaponSub !== false) {
+          thickLinePixels(ctx, x - dir.x * 10, y - 5 - dir.y * 10, x - dir.x * subLen + dir.y * bossSwing, y - 5 - dir.y * subLen - dir.x * bossSwing, 4);
+        } else {
+          rect(ctx, x - dir.x * 10 - 4, y - 5 - dir.y * 10 - 2, 8, 4);
+        }
         rect(ctx, x - 18, y - 25, 36, 4);
         rect(ctx, x - 14, y + 14, 28, 4);
         rect(ctx, x - 22, y - 18, 4, 36);
@@ -3036,6 +3087,7 @@
     }
 
     drawBossBreakScars(ctx, x, y, scale) {
+      const scarScale = Math.min(scale, 1.35);
       const marks = [];
       if (this.parts.head === false) marks.push({ x: 0, y: -9, w: 16, h: 3, cut: "h" });
       if (this.parts.body === false) marks.push({ x: 0, y: -1, w: 22, h: 4, cut: "x" });
@@ -3048,22 +3100,23 @@
       if (this.parts.horn === false) marks.push({ x: 0, y: -24, w: 28, h: 5, cut: "h" });
       if (marks.length === 0) return;
 
-      ctx.fillStyle = BLOOD_BRIGHT;
+      ctx.fillStyle = ORANGE;
       for (const mark of marks) {
-        const mx = x + mark.x * scale;
-        const my = y + mark.y * scale;
-        rect(ctx, mx - mark.w * scale / 2, my - mark.h * scale / 2, mark.w * scale, Math.max(2, 2 * scale));
+        const mx = x + mark.x * scarScale;
+        const my = y + mark.y * scarScale;
+        thickLinePixels(ctx, mx - mark.w * scarScale / 2, my, mx + mark.w * scarScale / 2, my, Math.max(2, 2 * scarScale));
         if (mark.cut === "x") {
-          linePixels(ctx, mx - mark.w * scale / 2, my - mark.h * scale, mx + mark.w * scale / 2, my + mark.h * scale);
-          linePixels(ctx, mx + mark.w * scale / 2, my - mark.h * scale, mx - mark.w * scale / 2, my + mark.h * scale);
+          linePixels(ctx, mx - mark.w * scarScale / 2, my - mark.h * scarScale, mx + mark.w * scarScale / 2, my + mark.h * scarScale);
+          linePixels(ctx, mx + mark.w * scarScale / 2, my - mark.h * scarScale, mx - mark.w * scarScale / 2, my + mark.h * scarScale);
         } else if (mark.cut === "v") {
-          rect(ctx, mx - mark.w * scale / 2, my, Math.max(2, 3 * scale), mark.h * scale);
-          rect(ctx, mx + mark.w * scale / 2 - 2, my, Math.max(2, 3 * scale), mark.h * scale);
+          linePixels(ctx, mx - mark.w * scarScale / 2, my - mark.h * scarScale / 2, mx, my + mark.h * scarScale / 2);
+          linePixels(ctx, mx + mark.w * scarScale / 2, my - mark.h * scarScale / 2, mx, my + mark.h * scarScale / 2);
         } else if (mark.cut === "weapon") {
-          rect(ctx, mx - mark.w * scale / 2, my - mark.h * scale / 2, mark.w * scale, mark.h * scale);
-          ctx.fillStyle = ORANGE;
+          dashedLinePixels(ctx, mx - mark.w * scarScale / 2, my - mark.h * scarScale / 2, mx + mark.w * scarScale / 2, my + mark.h * scarScale / 2, Math.max(2, 2 * scarScale), 7);
+          dashedLinePixels(ctx, mx + mark.w * scarScale / 2, my - mark.h * scarScale / 2, mx - mark.w * scarScale / 2, my + mark.h * scarScale / 2, Math.max(2, 2 * scarScale), 7);
+          ctx.fillStyle = LIGHT_ORANGE;
           rect(ctx, mx - 2, my - 2, 4, 4);
-          ctx.fillStyle = BLOOD_BRIGHT;
+          ctx.fillStyle = ORANGE;
         }
       }
     }
@@ -3111,7 +3164,9 @@
       this.timer -= dt;
       if (this.timer > 0) return;
       const isOpeningWave = this.spawned < 5 && game.elapsed < 7;
-      this.timer = isOpeningWave ? 0.46 : Math.max(0.26, 0.95 - game.level * 0.035);
+      const progress = game.bloodGoal ? game.bloodGoal.progress() : 0;
+      const pressure = game.elapsed / 80 + progress * 0.5 + game.runStats.bossKills * 0.08 + game.runStats.midBossKills * 0.04;
+      this.timer = isOpeningWave ? 0.46 : Math.max(0.3, 0.98 - Math.min(0.58, pressure * 0.13));
       const type = this.pickType(game.elapsed);
       this.spawnEnemy(game, type, isOpeningWave);
       this.spawned += 1;
@@ -3623,7 +3678,7 @@
         `攻撃速度: ${(1 / player.attackInterval).toFixed(2)}/秒`,
         `移動速度: ${Math.round(player.speed)}`,
         `刀リーチ: ${Math.round(player.katana.range())}`,
-        `刀幅: ${Math.round(player.katana.thickness())}`,
+        `斬り幅: ${Math.round(player.katana.thickness())}`,
         `会心率: ${Math.round(player.criticalChance * 100)}%`,
         `会心倍率: ${player.criticalMultiplier.toFixed(2)}`
       ], mid, top);
@@ -3958,7 +4013,9 @@
       this.hitStop = 0;
       this.level = 1;
       this.xp = 0;
-      this.xpToNext = 3;
+      this.xpToNext = calculateXpToNext(this.level);
+      this.attributePity = 0;
+      this.attributeHistory = [];
       this.nextLevelBossLevel = 10;
       this.elapsed = 0;
       this.notice = "移動: WASD / 矢印";
@@ -4485,17 +4542,60 @@
       while (this.xp >= this.xpToNext) {
         this.xp -= this.xpToNext;
         this.level += 1;
-        this.xpToNext = Math.floor(this.xpToNext * 1.06 + 1);
-        const upgrade = Math.random() < 0.14 ? this.player.upgradeAttackSpeed() : this.player.upgradeAttackPower();
+        this.xpToNext = calculateXpToNext(this.level);
+        const major = this.level % 5 === 0;
+        const upgrade = Math.random() < 0.14 ? this.player.upgradeAttackSpeed(major) : this.player.upgradeAttackPower(major);
         this.sfx.levelUp();
-        const upgradeNotice = upgrade === "SPEED" ? "速度強化 / 刀幅" : upgrade === "LONG" ? "刀身伸長" : "刀身肥大";
+        const upgradeNotice = upgrade === "SPEED" ? "手数アップ" : upgrade === "LONG" ? "間合い拡張" : "斬撃強化";
         this.effectManager.levelUp(this.player.x, this.player.y, upgradeNotice, this.width < 560);
         this.screenShake.add(10, 0.22);
         this.requestHitStop(0.055);
         this.notice = `レベルアップ ${upgradeNotice}`;
         this.noticeTimer = 1.6;
         this.effects.push({ x: this.player.x, y: this.player.y, life: 0.28, size: 52 });
+        if (isAttributeGuaranteeLevel(this.level)) this.grantGuaranteedAttribute(`Lv${this.level}`);
         this.spawnLevelBossIfNeeded();
+      }
+    }
+
+    chooseAttributeKind() {
+      const levels = ELEMENT_ITEMS.map((id) => ({ id, level: this.player.attributes.get(id) }));
+      const minLevel = Math.min(...levels.map((entry) => entry.level));
+      const recent = new Set((this.attributeHistory || []).slice(-2));
+      const weighted = [];
+      for (const entry of levels) {
+        let weight = entry.level === minLevel ? 6 : 2;
+        if (entry.level === 0) weight += 5;
+        if (recent.has(entry.id)) weight = Math.max(1, Math.floor(weight * 0.35));
+        for (let i = 0; i < weight; i += 1) weighted.push(entry.id);
+      }
+      return weighted[Math.floor(Math.random() * weighted.length)] || ELEMENT_ITEMS[0];
+    }
+
+    rememberAttribute(id) {
+      if (!this.attributeHistory) this.attributeHistory = [];
+      this.attributeHistory.push(id);
+      if (this.attributeHistory.length > 6) this.attributeHistory.shift();
+    }
+
+    grantGuaranteedAttribute(reason = "保証") {
+      const kind = this.chooseAttributeKind();
+      const gain = this.player.addElement(kind, this);
+      this.rememberAttribute(kind);
+      this.sfx.item();
+      this.effectManager.attributeHit(kind, this.player.x, this.player.y, { x: 0, y: -1 }, this.player.attributes.get(kind));
+      this.effects.push({ type: "rareDrop", x: this.player.x, y: this.player.y - 18, life: 0.9, maxLife: 0.9, size: 42 });
+      const label = ATTRIBUTE_DEFINITIONS[kind].displayName;
+      this.notice = `${reason} 属性獲得: ${label}${gain ? gain.level : ""}`;
+      this.noticeTimer = 2.0;
+      return kind;
+    }
+
+    addAttributePity(amount, x = this.player.x, y = this.player.y) {
+      this.attributePity = (this.attributePity || 0) + amount;
+      while (this.attributePity >= 100) {
+        this.attributePity -= 100;
+        this.dropManager.dropAttribute(x, y, true);
       }
     }
 
@@ -4910,10 +5010,10 @@
       const y = Math.round(effect.y - (1 - t) * 46);
       ctx.save();
       ctx.globalAlpha = clamp(t * 1.25, 0, 1);
-      ctx.fillStyle = BLOOD_BRIGHT;
-      ctx.font = "20px Courier New, monospace";
-      ctx.fillText(effect.text, x - effect.text.length * 8, y);
       ctx.fillStyle = ORANGE;
+      ctx.font = "18px Courier New, monospace";
+      ctx.fillText(effect.text, x - effect.text.length * 7, y);
+      ctx.fillStyle = LIGHT_ORANGE;
       rect(ctx, x - 38, y + 27, Math.max(5, 76 * t), 3);
       ctx.restore();
     }
