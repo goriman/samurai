@@ -1510,11 +1510,14 @@
         const lx = cell.col * this.cellSize;
         const ly = cell.row * this.cellSize;
         if (fill <= 0) {
-          if (this.progressValue < 0.28) continue;
-          ctx.fillStyle = this.progressValue > 0.85 ? (nearing ? BLOOD_WET : BLOOD_DARK) : LIGHT_ORANGE;
-          const alphaSize = this.progressValue > 0.75 ? 0.34 : 0.18;
+          const oldAlpha = ctx.globalAlpha;
+          const visibleStage = this.progressValue < 0.25 ? cell.stage <= 1 : this.progressValue < 0.6 ? cell.stage <= 2 : true;
+          ctx.globalAlpha = visibleStage ? (this.progressValue < 0.25 ? 0.22 : this.progressValue < 0.6 ? 0.36 : 0.52) : 0.12;
+          ctx.fillStyle = this.progressValue > 0.85 ? (nearing ? BLOOD_WET : BLOOD_DARK) : cell.stage <= 1 ? BLOOD_DARK : LIGHT_ORANGE;
+          const alphaSize = this.progressValue > 0.75 ? 0.34 : this.progressValue > 0.25 ? 0.2 : 0.14;
           const size = Math.max(2, Math.floor(this.cellSize * (cell.mark === "H" ? alphaSize + 0.08 : alphaSize)));
           rect(ctx, lx + this.cellSize / 2 - size / 2, ly + this.cellSize / 2 - size / 2, size, size);
+          ctx.globalAlpha = oldAlpha;
           continue;
         }
         ctx.fillStyle = pulse && fill >= 1 ? BLOOD_BRIGHT : this.bloodTone(cell, fill, false);
@@ -1538,6 +1541,7 @@
       const inset = Math.max(1, Math.round(this.cellSize * (0.42 - fill * 0.28)));
       const w = Math.max(2, this.cellSize - inset * 2);
       const h = Math.max(2, this.cellSize - inset * 2);
+      const main = ctx.fillStyle;
       if (fill < 0.34) {
         rect(ctx, lx + this.cellSize * 0.42, ly + this.cellSize * 0.42, Math.max(2, w * 0.35), Math.max(2, h * 0.35));
         return;
@@ -1549,6 +1553,13 @@
       }
       rect(ctx, lx + inset, ly + inset, w, h);
       rect(ctx, lx + inset - 1, ly + inset + 1, w + 2, Math.max(2, h - 2));
+      ctx.fillStyle = BLOOD_DARK;
+      rect(ctx, lx + inset, ly + inset, w, 1);
+      rect(ctx, lx + inset, ly + inset, 1, h);
+      ctx.fillStyle = fill >= 0.95 && (cell.mark === "H" || cell.mark === "A") ? BLOOD_BRIGHT : BLOOD_WET;
+      const glint = Math.max(2, Math.floor(this.cellSize * 0.18));
+      rect(ctx, lx + inset + Math.max(1, Math.floor(w * 0.58)), ly + inset + Math.max(1, Math.floor(h * 0.22)), glint, 2);
+      ctx.fillStyle = main;
     }
 
     bloodTone(cell, fill, preview = false) {
@@ -1583,15 +1594,25 @@
         const cell = targetCells[i];
         const life = (boss ? 0.54 : 0.36) + Math.random() * 0.18;
         if (this.trails.length >= this.maxTrails) this.trails.shift();
+        const sprayAngle = Math.random() * FULL_SPIN;
+        const sprayDist = (boss ? 54 : heavy ? 38 : 26) + Math.random() * (boss ? 54 : 28);
         this.trails.push({
           x: enemy.x,
           y: enemy.y,
+          sprayX: enemy.x + Math.cos(sprayAngle) * sprayDist,
+          sprayY: enemy.y + Math.sin(sprayAngle) * sprayDist,
           tx: cell.cx,
           ty: cell.cy,
-          bend: (Math.random() - 0.5) * 42,
+          bend: (Math.random() - 0.5) * (boss ? 86 : 54),
+          delay: i * (boss ? 0.018 : 0.026),
+          phase: "seek",
           life,
           maxLife: life,
-          size: trailSize
+          size: trailSize,
+          widthStart: trailSize + (boss ? 4 : 2),
+          widthEnd: Math.max(2, trailSize - 2),
+          impactPulse: boss || critical || heavy ? 0.18 : 0.1,
+          kind: boss ? "boss" : critical ? "critical" : heavy ? "heavy" : rare ? "rare" : "normal"
         });
       }
       const strayCount = Math.min(boss ? 22 : critical ? 16 : heavy ? 12 : rare ? 10 : 6 + Math.floor(bloodPower / 4), this.maxSplats - this.splats.length);
@@ -1618,20 +1639,30 @@
       if (!bonusBlood || bonusBlood <= 0 || game.bloodGoal.complete) return false;
       const result = game.bloodGoal.splatter(origin.x, origin.y, { comboBonusBlood: bonusBlood, comboCount, source: "combo" });
       const targetCells = result.cells || [];
-      const trailLimit = Math.min(targetCells.length, 8);
+      const trailLimit = Math.min(targetCells.length, 12);
       for (let i = 0; i < trailLimit; i += 1) {
         const cell = targetCells[i];
-        const life = 0.42 + Math.random() * 0.18;
+        const life = 0.56 + Math.random() * 0.2;
         if (this.trails.length >= this.maxTrails) this.trails.shift();
+        const angle = i * 0.72 + comboCount * 0.17;
+        const dist = 42 + i * 4;
         this.trails.push({
           x: origin.x,
           y: origin.y,
+          sprayX: origin.x + Math.cos(angle) * dist,
+          sprayY: origin.y + Math.sin(angle) * dist,
           tx: cell.cx,
           ty: cell.cy,
-          bend: (Math.random() - 0.5) * 62,
+          bend: Math.sin(angle) * 96,
+          delay: i * 0.025,
+          phase: "seek",
           life,
           maxLife: life,
-          size: 4
+          size: 5,
+          widthStart: 8,
+          widthEnd: 3,
+          impactPulse: 0.2,
+          kind: "combo"
         });
       }
       const strayCount = Math.min(8, this.maxSplats - this.splats.length);
@@ -1658,6 +1689,7 @@
       let trailWrite = 0;
       for (let i = 0; i < this.trails.length; i += 1) {
         const trail = this.trails[i];
+        trail.delay = Math.max(0, (trail.delay || 0) - dt);
         trail.life -= dt;
         if (trail.life > 0) this.trails[trailWrite++] = trail;
       }
@@ -1677,17 +1709,31 @@
 
     draw(ctx) {
       for (const trail of this.trails) {
-        const t = clamp(1 - trail.life / trail.maxLife, 0, 1);
-        const sx = lerp(trail.x, trail.tx, t * 0.92);
-        const sy = lerp(trail.y, trail.ty, t * 0.92);
-        const midX = lerp(trail.x, trail.tx, 0.5) + trail.bend;
-        const midY = lerp(trail.y, trail.ty, 0.5) - trail.bend * 0.35;
-        const cx = lerp(lerp(trail.x, midX, t), lerp(midX, trail.tx, t), t);
-        const cy = lerp(lerp(trail.y, midY, t), lerp(midY, trail.ty, t), t);
-        ctx.fillStyle = BLOOD_DARK;
-        thickLinePixels(ctx, sx, sy, cx, cy, Math.max(2, trail.size * (1 - t * 0.35)));
-        ctx.fillStyle = t > 0.75 ? BLOOD_BRIGHT : BLOOD;
+        const raw = clamp(1 - trail.life / trail.maxLife, 0, 1);
+        const t = trail.delay > 0 ? 0 : clamp(raw / Math.max(0.001, 1 - (trail.delay || 0)), 0, 1);
+        const sprayT = clamp(t / 0.28, 0, 1);
+        const seekT = clamp((t - 0.2) / 0.78, 0, 1);
+        const sx = lerp(trail.x, trail.sprayX ?? trail.x, sprayT);
+        const sy = lerp(trail.y, trail.sprayY ?? trail.y, sprayT);
+        const startX = trail.sprayX ?? trail.x;
+        const startY = trail.sprayY ?? trail.y;
+        const midX = lerp(startX, trail.tx, 0.5) + trail.bend;
+        const midY = lerp(startY, trail.ty, 0.5) - trail.bend * 0.28;
+        const cx = lerp(lerp(startX, midX, seekT), lerp(midX, trail.tx, seekT), seekT);
+        const cy = lerp(lerp(startY, midY, seekT), lerp(midY, trail.ty, seekT), seekT);
+        const width = lerp(trail.widthStart || trail.size, trail.widthEnd || trail.size, seekT);
+        ctx.fillStyle = trail.kind === "critical" || trail.kind === "combo" ? BLOOD_WET : BLOOD_DARK;
+        thickLinePixels(ctx, trail.x, trail.y, sx, sy, Math.max(2, width * 0.65));
+        ctx.fillStyle = trail.kind === "boss" || trail.kind === "combo" ? BLOOD : BLOOD_DARK;
+        thickLinePixels(ctx, sx, sy, cx, cy, Math.max(2, width));
+        ctx.fillStyle = seekT > 0.82 ? BLOOD_BRIGHT : trail.kind === "critical" ? BLOOD_WET : BLOOD;
         rect(ctx, cx - trail.size, cy - trail.size, trail.size * 2, trail.size * 2);
+        if (seekT > 0.88) {
+          const pulse = (trail.impactPulse || 0.1) * (seekT - 0.88) / 0.12;
+          ctx.fillStyle = BLOOD_BRIGHT;
+          rect(ctx, trail.tx - trail.size * (1 + pulse), trail.ty - 1, trail.size * 2 * (1 + pulse), 2);
+          rect(ctx, trail.tx - 1, trail.ty - trail.size * (1 + pulse), 2, trail.size * 2 * (1 + pulse));
+        }
       }
       ctx.fillStyle = BLOOD_DARK;
       for (const splat of this.splats) {
@@ -3059,13 +3105,7 @@
     }
 
     absorbXp(value, game) {
-      this.powerLevel += 1;
-      this.hp += 3 + value * 2;
-      this.def.damage += 0.45;
-      this.def.speed += 0.7;
-      this.radius = Math.min(this.radius + 0.35, this.def.radius + 5);
-      this.flash = 0.22;
-      game.effects.push({ type: "enemyPower", x: this.x, y: this.y, life: 0.55, maxLife: 0.55, size: 18 + this.powerLevel * 4 });
+      return;
     }
 
     draw(ctx, player) {
@@ -3874,16 +3914,36 @@
       const pulse = 0.5 + Math.sin(t * 5) * 0.5;
       const compact = game.width < 560;
       const safeBottom = compact ? 92 : 42;
+      ctx.save();
+      ctx.globalAlpha = 0.72;
       ctx.fillStyle = BLACK;
-      rect(ctx, game.width / 2 - 130, UI_HEIGHT + 24, 260, 96);
+      rect(ctx, 0, UI_HEIGHT, game.width, game.height - UI_HEIGHT);
+      ctx.restore();
+      const frameW = Math.min(compact ? game.width - 44 : 560, game.width - 44);
+      const frameH = Math.min(compact ? 360 : 420, game.height - UI_HEIGHT - safeBottom - 44);
+      const frameX = Math.round((game.width - frameW) / 2);
+      const frameY = Math.round(UI_HEIGHT + Math.max(18, (game.height - UI_HEIGHT - safeBottom - frameH) / 2));
+      ctx.fillStyle = pulse > 0.62 ? BLOOD_WET : BLOOD_DARK;
+      this.drawFrame(ctx, frameX, frameY, frameW, frameH, 2);
+      ctx.fillStyle = BLOOD_DARK;
+      rect(ctx, frameX + 12, frameY + 12, frameW - 24, 2);
+      rect(ctx, frameX + 12, frameY + frameH - 14, frameW - 24, 2);
+      rect(ctx, frameX + 12, frameY + 12, 2, frameH - 24);
+      rect(ctx, frameX + frameW - 14, frameY + 12, 2, frameH - 24);
+      ctx.save();
+      ctx.globalAlpha = 0.82 + pulse * 0.18;
+      game.bloodGoal.draw(ctx);
+      ctx.restore();
+      ctx.fillStyle = BLACK;
+      rect(ctx, game.width / 2 - 146, UI_HEIGHT + 22, 292, 104);
       ctx.fillStyle = LIGHT_ORANGE;
-      this.drawFrame(ctx, game.width / 2 - 130, UI_HEIGHT + 24, 260, 96, 1);
+      this.drawFrame(ctx, game.width / 2 - 146, UI_HEIGHT + 22, 292, 104, 1);
       ctx.fillStyle = pulse > 0.45 ? BLOOD_BRIGHT : BLOOD_WET;
       ctx.font = "30px Courier New, monospace";
       ctx.fillText("血紋完成", game.width / 2 - 82, UI_HEIGHT + 34);
       ctx.font = "16px Courier New, monospace";
       ctx.fillStyle = LIGHT_ORANGE;
-      ctx.fillText(`完成作品: ${game.bloodGoal.displayName()}`, game.width / 2 - 96, UI_HEIGHT + 72);
+      ctx.fillText(`完成作品: ${game.bloodGoal.displayName()}`, game.width / 2 - 116, UI_HEIGHT + 74);
       if (game.clearChoiceVisible) {
         const boxW = compact ? Math.min(300, game.width - 52) : 240;
         const boxH = compact ? 88 : 76;
@@ -4507,7 +4567,6 @@
       }
       this.enemies.length = enemyWrite;
       this.rebuildEnemyGrid();
-      this.resolveEnemyXpAbsorption();
 
       let orbWrite = 0;
       for (let i = 0; i < this.orbs.length; i += 1) {
@@ -4553,7 +4612,7 @@
         this.sfx.update();
         return;
       }
-      if (this.clearTimer > 1.2) this.clearChoiceVisible = true;
+      if (this.clearTimer > 1.65) this.clearChoiceVisible = true;
       if (this.clearChoiceVisible && this.clearChoiceCooldown <= 0) {
         if (this.input.pressed("arrowup") || this.input.pressed("w") || this.input.pressed("arrowdown") || this.input.pressed("s")) {
           this.clearChoiceIndex = this.clearChoiceIndex === 0 ? 1 : 0;
@@ -4602,15 +4661,25 @@
         : { x: this.player.x, y: this.player.y };
       const completedByBlood = this.bloodManager.spawnComboBonusBlood(this, source, comboCount, bonusBlood);
       this.runStats.comboBloodBonus += bonusBlood;
-      this.notice = `連斬血 +${bonusBlood}`;
-      this.noticeTimer = 1.2;
+      this.notice = `血流解放 +${bonusBlood}`;
+      this.noticeTimer = 1.45;
+      this.objectivePulse = Math.max(this.objectivePulse, 1.12);
       this.effects.push({
         type: "comboBlood",
         x: source.x,
         y: source.y,
-        life: 0.9,
-        maxLife: 0.9,
-        text: `連斬血 +${bonusBlood}`
+        life: 1.08,
+        maxLife: 1.08,
+        text: `血流解放 +${bonusBlood}`
+      });
+      this.effects.push({
+        type: "objectivePop",
+        x: this.width / 2,
+        y: this.playArea.top + Math.min(120, this.playArea.height * 0.24),
+        life: 0.96,
+        maxLife: 0.96,
+        text: "血流解放",
+        strong: true
       });
       if (completedByBlood) this.clearGame();
       return bonusBlood;
@@ -5023,31 +5092,7 @@
     }
 
     resolveEnemyXpAbsorption() {
-      let write = 0;
-      for (let i = 0; i < this.orbs.length; i += 1) {
-        const orb = this.orbs[i];
-        let consumed = false;
-        const visitEnemy = (enemy) => {
-          if (enemy.dead) return;
-          const range = enemy.radius + orb.radius + 6;
-          if (orb.absorbed || distanceSq(orb.x, orb.y, enemy.x, enemy.y) > range * range) return;
-          enemy.absorbXp(orb.value, this);
-          consumed = true;
-        };
-        if (this.enemyGrid) {
-          this.enemyGrid.forEachCircle(orb.x, orb.y, 34, (enemy) => {
-            visitEnemy(enemy);
-            return !consumed;
-          });
-        } else {
-          for (const enemy of this.enemies) {
-            visitEnemy(enemy);
-            if (consumed) break;
-          }
-        }
-        if (!consumed) this.orbs[write++] = orb;
-      }
-      this.orbs.length = write;
+      return;
     }
 
     maybeDropItem(x, y) {
