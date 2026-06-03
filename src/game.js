@@ -23,6 +23,8 @@
   const ORANGE = COLORS.orange;
   const LIGHT_ORANGE = COLORS.orangeDim;
   const BLACK = COLORS.black;
+  const TITLE_HOT = COLORS.fire;
+  const TITLE_LIGHT = COLORS.fireSub;
   const BLOOD = COLORS.monsterBloodMain;
   const BLOOD_DARK = COLORS.monsterBloodDark;
   const BLOOD_WET = COLORS.monsterBloodWet;
@@ -2501,6 +2503,9 @@
       this.lastHitElement = null;
       this.walkPhase = Math.random() * FULL_SPIN;
       this.lastMoveAmount = 0;
+      this.headlessChaosTimer = 0;
+      this.headlessMoveAngle = Math.random() * FULL_SPIN;
+      this.headlessAttackJitter = 0;
     }
 
     update(dt, game) {
@@ -2524,11 +2529,11 @@
       const partMultiplier = this.movementMultiplier();
       this.updateBossBehavior(dt, game, dir, dist);
       this.updateTierBehavior(dt, game, dir, dist, statusMultiplier);
-      const headDrift = this.parts.head === false ? { x: Math.sin(this.walkPhase * 0.7) * 0.22, y: Math.cos(this.walkPhase * 0.7) * 0.22 } : { x: 0, y: 0 };
+      const moveDir = isBossType(this.type) && this.parts.head === false ? this.bossMoveDir(dir) : dir;
       if (dist > stopRange && statusMultiplier > 0) {
-        const strafe = this.bossStrafeDir(dir);
-        const moveX = (dir.x + strafe.x + headDrift.x) * this.def.speed * statusMultiplier * partMultiplier * dt;
-        const moveY = (dir.y + strafe.y + headDrift.y) * this.def.speed * statusMultiplier * partMultiplier * dt;
+        const strafe = this.bossStrafeDir(moveDir);
+        const moveX = (moveDir.x + strafe.x) * this.def.speed * statusMultiplier * partMultiplier * dt;
+        const moveY = (moveDir.y + strafe.y) * this.def.speed * statusMultiplier * partMultiplier * dt;
         this.x += moveX;
         this.y += moveY;
         moveAmount += Math.hypot(moveX, moveY);
@@ -2617,6 +2622,90 @@
       }
     }
 
+    bossPartState() {
+      const missingLegs = (this.parts.leftLeg ? 0 : 1) + (this.parts.rightLeg ? 0 : 1);
+      const missingArms = (this.parts.leftArm ? 0 : 1) + (this.parts.rightArm ? 0 : 1);
+      return {
+        headBroken: this.parts.head === false,
+        missingLegs,
+        oneLegBroken: missingLegs === 1,
+        bothLegsBroken: missingLegs >= 2,
+        leftArmBroken: this.parts.leftArm === false,
+        rightArmBroken: this.parts.rightArm === false,
+        bothArmsBroken: missingArms >= 2,
+        mainWeaponBroken: this.parts.weaponMain === false,
+        subWeaponBroken: this.parts.weaponSub === false,
+        hornBroken: this.parts.horn === false,
+        canUseMainWeapon: this.parts.weaponMain === true && this.parts.rightArm === true,
+        canUseSubWeapon: this.parts.weaponSub === true && this.parts.leftArm === true
+      };
+    }
+
+    bossConfusedDir(dir, strength = 1) {
+      if (this.parts.head !== false) return dir;
+      const chaos = this.headlessChaosTimer > 0 ? 1.45 : 1;
+      const jitter = 1 + this.headlessAttackJitter * 0.35;
+      const t = this.walkPhase + this.enemyLevel * 0.37 + this.rank * 0.53 + this.headlessMoveAngle * 0.21;
+      const modeRoll = Math.abs(Math.sin(t * 1.7 + Math.cos(t * 0.8)));
+      let angle = Math.atan2(dir.y, dir.x);
+      const power = strength * chaos * jitter;
+
+      if (modeRoll < 0.42) {
+        angle += Math.sin(t * 2.1) * 0.45 * power;
+      } else if (modeRoll < 0.68) {
+        angle += (Math.sin(t) > 0 ? 1 : -1) * (0.75 + 0.35 * power);
+      } else if (modeRoll < 0.86) {
+        angle += Math.PI + Math.sin(t * 1.3) * 0.55 * power;
+      } else {
+        angle = this.headlessMoveAngle + t * 2.4;
+      }
+
+      return { x: Math.cos(angle), y: Math.sin(angle) };
+    }
+
+    bossMoveDir(dir) {
+      return this.parts.head === false ? this.bossConfusedDir(dir, 0.9) : dir;
+    }
+
+    bossAimDir(dir) {
+      return this.parts.head === false ? this.bossConfusedDir(dir, 1.35) : dir;
+    }
+
+    headlessAttackGate() {
+      if (this.parts.head !== false) return "normal";
+      const t = this.walkPhase + this.enemyLevel * 0.91 + this.rank * 0.41 + this.headlessMoveAngle;
+      const roll = Math.abs(Math.sin(t * 2.7));
+      if (roll < 0.18) return "skip";
+      if (roll < 0.34) return "delay";
+      if (roll < 0.5) return "panic";
+      if (roll < 0.66) return "rush";
+      return "normal";
+    }
+
+    bossHeadlessPanicAttack(game, dir) {
+      const aim = this.bossAimDir(dir);
+      this.bossLineAttack(game, aim, 62 + this.rank * 6, 18, 0.42);
+      if (Math.random() < 0.45) {
+        this.bossLineAttack(game, { x: -aim.y, y: aim.x }, 48 + this.rank * 4, 16, 0.32);
+      }
+      this.bossSpecialTimer = 1.3 + Math.random() * 1.2;
+    }
+
+    bossHeadlessRush(game, dir) {
+      const parts = this.bossPartState();
+      const rushDir = this.bossMoveDir(dir);
+      let power = this.type === "levelBoss" ? 240 : 180;
+      if (parts.oneLegBroken) power *= 0.55;
+      if (parts.bothLegsBroken) power *= 0.22;
+      this.vx += rushDir.x * power;
+      this.vy += rushDir.y * power;
+      this.bossCharge = 0.22;
+      if (!parts.bothArmsBroken && Math.random() < 0.65) {
+        this.bossLineAttack(game, rushDir, 58 + this.rank * 5, 20, 0.45);
+      }
+      this.bossSpecialTimer = 1.4 + Math.random() * 1.4;
+    }
+
     bossStrafeDir(dir) {
       if (this.type === "midBossArcher") {
         const side = { x: -dir.y, y: dir.x };
@@ -2639,56 +2728,81 @@
       if (this.bossSpecialTimer > 0) return;
       const rank = this.type === "levelBoss" ? this.rank : 1;
       const hpRatio = this.hp / this.def.hp;
+      const parts = this.bossPartState();
       const phaseBoost = hpRatio < 0.4 ? 0.72 : hpRatio < 0.7 ? 0.88 : 1;
-      const headPenalty = this.parts.head === false ? 1.25 : 1;
-      const weaponPenalty = this.parts.weaponMain === false ? 0.62 : 1;
+      const headTiming = parts.headBroken ? 1.2 + Math.random() * 0.75 : 1;
+      const weaponPenalty = parts.mainWeaponBroken ? 0.62 : 1;
+      const aim = this.bossAimDir(dir);
+      if (parts.headBroken) {
+        const gate = this.headlessAttackGate();
+        if (gate === "skip") {
+          this.bossSpecialTimer = 0.55 + Math.random() * 0.7;
+          return;
+        }
+        if (gate === "delay") {
+          this.bossSpecialTimer = 1.0 + Math.random() * 1.1;
+          return;
+        }
+        if (gate === "panic") {
+          this.bossHeadlessPanicAttack(game, dir);
+          return;
+        }
+        if (gate === "rush") {
+          this.bossHeadlessRush(game, dir);
+          return;
+        }
+      }
       if (this.type === "midBoss") {
-        const chargePower = this.parts.leftLeg === false || this.parts.rightLeg === false ? 170 : 260;
-        this.vx += dir.x * chargePower;
-        this.vy += dir.y * chargePower;
+        const chargePower = parts.oneLegBroken || parts.bothLegsBroken ? 170 : 260;
+        const chargeDir = parts.headBroken ? this.bossMoveDir(dir) : dir;
+        this.vx += chargeDir.x * chargePower;
+        this.vy += chargeDir.y * chargePower;
         this.bossCharge = 0.25;
-        this.bossLineAttack(game, dir, 78 * weaponPenalty, 16, 0.65);
-        if (hpRatio < 0.45 && this.parts.weaponSub !== false) this.bossLineAttack(game, { x: -dir.y, y: dir.x }, 46, 18, 0.45);
+        this.bossLineAttack(game, aim, 78 * weaponPenalty, 16, 0.65);
+        if (hpRatio < 0.45 && parts.canUseSubWeapon) this.bossLineAttack(game, { x: -aim.y, y: aim.x }, 46, 18, 0.45);
         if (dist < 70) this.bossDamagePlayer(game, 0.75);
-        this.bossSpecialTimer = 2.6 * phaseBoost * headPenalty;
+        this.bossSpecialTimer = 2.6 * phaseBoost * headTiming;
         return;
       }
       if (this.type === "midBossArcher") {
-        const side = { x: -dir.y, y: dir.x };
+        const moveDir = parts.headBroken ? this.bossMoveDir(dir) : dir;
+        const side = { x: -moveDir.y, y: moveDir.x };
         const retreat = dist < 118 ? -1 : 0;
-        const legPenalty = this.parts.leftLeg === false || this.parts.rightLeg === false ? 0.48 : 1;
-        this.x += (side.x * Math.sin(this.walkPhase) * 54 + dir.x * retreat * 68) * dt * legPenalty;
-        this.y += (side.y * Math.sin(this.walkPhase) * 54 + dir.y * retreat * 68) * dt * legPenalty;
-        const baseAngle = Math.atan2(dir.y, dir.x);
-        const spread = hpRatio < 0.4 ? 0.26 : 0.18;
-        if (this.parts.weaponMain !== false) this.bossLineAttack(game, { x: Math.cos(baseAngle - spread), y: Math.sin(baseAngle - spread) }, 150, 10, 0.55);
-        if (this.parts.weaponSub !== false) this.bossLineAttack(game, { x: Math.cos(baseAngle + spread), y: Math.sin(baseAngle + spread) }, 150, 10, 0.55);
+        const legPenalty = parts.oneLegBroken || parts.bothLegsBroken ? 0.48 : 1;
+        this.x += (side.x * Math.sin(this.walkPhase) * 54 + moveDir.x * retreat * 68) * dt * legPenalty;
+        this.y += (side.y * Math.sin(this.walkPhase) * 54 + moveDir.y * retreat * 68) * dt * legPenalty;
+        const baseAngle = Math.atan2(aim.y, aim.x);
+        const spread = parts.headBroken ? 0.48 : hpRatio < 0.4 ? 0.26 : 0.18;
+        if (parts.canUseMainWeapon) this.bossLineAttack(game, { x: Math.cos(baseAngle - spread), y: Math.sin(baseAngle - spread) }, 150, 10, 0.55);
+        if (parts.canUseSubWeapon) this.bossLineAttack(game, { x: Math.cos(baseAngle + spread), y: Math.sin(baseAngle + spread) }, 150, 10, 0.55);
         if (hpRatio < 0.55) {
-          const shots = hpRatio < 0.35 ? 4 : 3;
+          const shots = parts.headBroken ? Math.max(1, (hpRatio < 0.35 ? 4 : 3) - 2) : hpRatio < 0.35 ? 4 : 3;
           for (let i = 0; i < shots; i += 1) {
             const angle = baseAngle + (i - (shots - 1) / 2) * 0.38;
             this.bossLineAttack(game, { x: Math.cos(angle), y: Math.sin(angle) }, 118, 9, 0.4);
           }
         }
-        this.bossSpecialTimer = 2.15 * phaseBoost * headPenalty * (this.parts.weaponMain === false && this.parts.weaponSub === false ? 1.35 : 1);
+        this.bossSpecialTimer = 2.15 * phaseBoost * headTiming * (parts.mainWeaponBroken && parts.subWeaponBroken ? 1.35 : 1);
         return;
       }
       if (rank < 2) {
-        this.bossLineAttack(game, dir, 82 * weaponPenalty, 16, 0.8);
-        this.bossSpecialTimer = 2.5 * phaseBoost * headPenalty;
+        this.bossLineAttack(game, aim, 82 * weaponPenalty, 16, 0.8);
+        this.bossSpecialTimer = 2.5 * phaseBoost * headTiming;
       } else if (rank < 4) {
-        this.vx += dir.x * 320;
-        this.vy += dir.y * 320;
-        this.bossLineAttack(game, dir, 120 * weaponPenalty, 20, 0.95);
-        if (hpRatio < 0.5 && this.parts.weaponSub !== false) this.bossLineAttack(game, { x: -dir.y, y: dir.x }, 76, 18, 0.55);
-        this.bossSpecialTimer = 2.25 * phaseBoost * headPenalty;
+        const chargeDir = parts.headBroken ? this.bossMoveDir(dir) : dir;
+        this.vx += chargeDir.x * 320;
+        this.vy += chargeDir.y * 320;
+        this.bossLineAttack(game, aim, 120 * weaponPenalty, 20, 0.95);
+        if (hpRatio < 0.5 && parts.canUseSubWeapon) this.bossLineAttack(game, { x: -aim.y, y: aim.x }, 76, 18, 0.55);
+        this.bossSpecialTimer = 2.25 * phaseBoost * headTiming;
       } else {
-        const shots = hpRatio < 0.4 ? 5 : 4;
+        const shots = parts.headBroken ? Math.max(2, (hpRatio < 0.4 ? 5 : 4) - 1) : hpRatio < 0.4 ? 5 : 4;
+        const center = Math.atan2(aim.y, aim.x);
         for (let i = 0; i < shots; i += 1) {
-          const angle = Math.atan2(dir.y, dir.x) + (i - 1.5) * 0.42;
+          const angle = center + (i - (shots - 1) / 2) * 0.42;
           this.bossLineAttack(game, { x: Math.cos(angle), y: Math.sin(angle) }, (130 + rank * 10) * weaponPenalty, 22, 0.72);
         }
-        this.bossSpecialTimer = Math.max(1.35, (2.4 - rank * 0.08) * phaseBoost * headPenalty);
+        this.bossSpecialTimer = Math.max(1.35, (2.4 - rank * 0.08) * phaseBoost * headTiming);
       }
     }
 
@@ -2743,6 +2857,8 @@
       this.slowTime = Math.max(0, this.slowTime - dt);
       this.freezeTime = Math.max(0, this.freezeTime - dt);
       this.stunTime = Math.max(0, this.stunTime - dt);
+      this.headlessChaosTimer = Math.max(0, this.headlessChaosTimer - dt);
+      this.headlessAttackJitter = Math.max(0, this.headlessAttackJitter - dt * 0.22);
       if (this.burnTime <= 0) return;
       this.burnTime -= dt;
       this.burnTick -= dt;
@@ -2843,6 +2959,25 @@
           maxLife: 0.92,
           text: `${bossPartLabel(part)}破壊`
         });
+        if (part === "head") {
+          this.headlessChaosTimer = 4.5;
+          this.headlessMoveAngle = Math.random() * FULL_SPIN;
+          this.headlessAttackJitter = 0.8;
+          this.bossSpecialTimer = 0.25 + Math.random() * 0.45;
+          const angle = Math.random() * FULL_SPIN;
+          const panicPower = this.type === "levelBoss" ? 180 : 130;
+          this.vx += Math.cos(angle) * panicPower;
+          this.vy += Math.sin(angle) * panicPower;
+          game.bossAttacks = game.bossAttacks.filter((attack) => attack.owner !== this);
+          game.effects.push({
+            type: "bossBreakPop",
+            x: this.x,
+            y: this.y - this.radius - 48,
+            life: 0.92,
+            maxLife: 0.92,
+            text: "制御不能"
+          });
+        }
       }
       return part;
     }
@@ -3153,9 +3288,10 @@
     update(dt, game) {
       this.bossTimer -= dt;
       if (this.bossTimer <= 0) {
+        const profile = game.difficultyProfile();
         const bossType = this.spawned % 2 === 0 ? "midBoss" : "midBossArcher";
         this.spawnEnemy(game, bossType);
-        this.bossTimer = Math.max(28, 48 - game.level * 1.2);
+        this.bossTimer = Math.max(30 + profile.bossDelay, 48 - Math.min(12, game.elapsed / 30));
         game.notice = bossType === "midBossArcher" ? "双弓射手" : "中ボス";
         game.noticeTimer = 1.8;
         game.sfx.boss();
@@ -3164,67 +3300,93 @@
       this.timer -= dt;
       if (this.timer > 0) return;
       const isOpeningWave = this.spawned < 5 && game.elapsed < 7;
+      const profile = game.difficultyProfile();
+      if (!isOpeningWave) {
+        let livingEnemies = 0;
+        for (const enemy of game.enemies) {
+          if (!enemy.dead) livingEnemies += 1;
+        }
+        if (livingEnemies >= profile.maxEnemies) {
+          this.timer = Math.max(this.timer, 0.3);
+          return;
+        }
+      }
       const progress = game.bloodGoal ? game.bloodGoal.progress() : 0;
       const pressure = game.elapsed / 80 + progress * 0.5 + game.runStats.bossKills * 0.08 + game.runStats.midBossKills * 0.04;
-      this.timer = isOpeningWave ? 0.46 : Math.max(0.3, 0.98 - Math.min(0.58, pressure * 0.13));
-      const type = this.pickType(game.elapsed);
+      const baseTimer = isOpeningWave ? 0.58 : Math.max(0.36, 1.08 - Math.min(0.52, pressure * 0.11));
+      this.timer = baseTimer / profile.spawnRate;
+      const type = this.pickType(game);
       this.spawnEnemy(game, type, isOpeningWave);
       this.spawned += 1;
     }
 
     spawnEnemy(game, type, nearPlayer = false) {
-      const bounds = game.playArea;
+      const point = this.findSpawnPoint(game, nearPlayer);
+      const profile = game.difficultyProfile();
+      const enemy = new Enemy(type, point.x, point.y, 1, game.enemyLevelForSpawn());
+      game.applyEnemyProfile(enemy, profile);
+      game.enemies.push(enemy);
       if (nearPlayer) {
-        const angle = Math.random() * Math.PI * 2;
-        const radius = 170 + Math.random() * 70;
-        const x = clamp(game.player.x + Math.cos(angle) * radius, bounds.left + 28, bounds.right - 28);
-        const y = clamp(game.player.y + Math.sin(angle) * radius, bounds.top + 28, bounds.bottom - 28);
-        game.enemies.push(new Enemy(type, x, y, 1, game.level));
         game.effects.push({
           type: "enemyPower",
-          x,
-          y,
+          x: point.x,
+          y: point.y,
           life: 0.32,
           maxLife: 0.32,
           size: 24
         });
-        return;
       }
-      const side = Math.floor(Math.random() * 4);
-      let x = 0;
-      let y = 0;
-      if (side === 0) {
-        x = bounds.left + Math.random() * bounds.width;
-        y = bounds.top - 16;
-      } else if (side === 1) {
-        x = bounds.right + 16;
-        y = bounds.top + Math.random() * bounds.height;
-      } else if (side === 2) {
-        x = bounds.left + Math.random() * bounds.width;
-        y = bounds.bottom + 16;
-      } else {
-        x = bounds.left - 16;
-        y = bounds.top + Math.random() * bounds.height;
-      }
-      game.enemies.push(new Enemy(type, x, y, 1, game.level));
     }
 
-    pickType(elapsed) {
+    findSpawnPoint(game, nearPlayer = false) {
+      const side = Math.floor(Math.random() * 4);
+      const bounds = game.playArea;
+      const profile = game.difficultyProfile();
+      const minDist = nearPlayer ? profile.openingSafeDistance : profile.safeSpawnDistance;
+      for (let i = 0; i < 12; i += 1) {
+        const candidateSide = i === 0 ? side : Math.floor(Math.random() * 4);
+        let x = 0;
+        let y = 0;
+        if (candidateSide === 0) {
+          x = bounds.left + Math.random() * bounds.width;
+          y = bounds.top - 18;
+        } else if (candidateSide === 1) {
+          x = bounds.right + 18;
+          y = bounds.top + Math.random() * bounds.height;
+        } else if (candidateSide === 2) {
+          x = bounds.left + Math.random() * bounds.width;
+          y = bounds.bottom + 18;
+        } else {
+          x = bounds.left - 18;
+          y = bounds.top + Math.random() * bounds.height;
+        }
+        if (distanceSq(x, y, game.player.x, game.player.y) >= minDist * minDist) return { x, y };
+      }
+      return {
+        x: bounds.left + Math.random() * bounds.width,
+        y: bounds.top - 18
+      };
+    }
+
+    pickType(game) {
+      const elapsed = game.elapsed;
+      const compact = game.difficultyProfile().compact;
+      const delay = compact * 10;
       const roll = Math.random();
-      if (elapsed < 10) {
-        if (roll < 0.62) return "farmer";
-        if (roll < 0.82) return "scout";
+      if (elapsed < 10 + delay * 0.4) {
+        if (roll < 0.68) return "farmer";
+        if (roll < 0.86) return "scout";
         return "sword";
       }
-      if (elapsed > 18 && roll > 0.975) return "blinkNinja";
-      if (elapsed > 24 && roll > 0.92) return "armor";
-      if (elapsed > 32 && roll > 0.86) return "brute";
-      if (elapsed > 20 && roll > 0.78) return "monk";
-      if (elapsed > 14 && roll > 0.66) return "shield";
-      if (elapsed > 16 && roll > 0.58) return "archer";
-      if (roll < 0.32) return "farmer";
-      if (roll < 0.5) return "scout";
-      if (roll < 0.66) return "spear";
+      if (elapsed > 18 + delay && roll > 0.975) return "blinkNinja";
+      if (elapsed > 30 + delay && roll > 0.92) return "armor";
+      if (elapsed > 40 + delay && roll > 0.86) return "brute";
+      if (elapsed > 30 + delay && roll > 0.78) return "monk";
+      if (elapsed > 22 + delay && roll > 0.66) return "shield";
+      if (elapsed > 26 + delay && roll > 0.62) return "archer";
+      if (roll < 0.38) return "farmer";
+      if (roll < 0.58) return "scout";
+      if (roll < 0.76) return "spear";
       return "sword";
     }
   }
@@ -3422,35 +3584,169 @@
       const t = clamp(game.guideTimer / game.guideMaxTimer, 0, 1);
       const fade = clamp(t * 2.2, 0, 1);
       const compact = game.width < 560;
-      const boxW = Math.min(520, game.width - 40);
-      const boxH = compact ? 136 : 146;
-      const x = Math.round((game.width - boxW) / 2);
-      const y = Math.round(UI_HEIGHT + 22);
+      const safeX = compact ? 18 : 42;
+      const safeTop = UI_HEIGHT + (compact ? 22 : 34);
+      const safeBottom = compact ? 34 : 38;
+      const panelW = Math.min(compact ? game.width - safeX * 2 : 760, game.width - safeX * 2);
+      const panelH = Math.min(compact ? 300 : 330, game.height - safeTop - safeBottom);
+      const x = Math.round((game.width - panelW) / 2);
+      const y = Math.round(safeTop);
       ctx.save();
       ctx.globalAlpha = fade;
+      this.drawRetroTitleBackdrop(ctx, game, x, y, panelW, panelH, compact);
+      this.drawTitleFaceShadow(ctx, game, x, y, panelW, panelH, compact);
+      this.drawRetroTitleCopy(ctx, game, x, y, panelW, panelH, compact);
+      ctx.restore();
+    }
+
+    drawRetroTitleBackdrop(ctx, game, x, y, w, h, compact) {
+      ctx.globalAlpha *= compact ? 0.96 : 0.98;
       ctx.fillStyle = BLACK;
-      rect(ctx, x, y, boxW, boxH);
+      rect(ctx, x, y, w, h);
       ctx.fillStyle = LIGHT_ORANGE;
-      this.drawFrame(ctx, x, y, boxW, boxH, 1);
+      this.drawFrame(ctx, x, y, w, h, compact ? 1 : 2);
+
+      ctx.globalAlpha *= compact ? 0.42 : 0.58;
+      for (let yy = y + 8; yy < y + h - 8; yy += 8) {
+        rect(ctx, x + 6, yy, w - 12, 1);
+      }
+      for (let yy = y + 12; yy < y + h - 10; yy += 16) {
+        for (let xx = x + 10 + ((yy / 8) % 2) * 8; xx < x + w - 10; xx += 16) {
+          rect(ctx, xx, yy, 2, 2);
+        }
+      }
+      ctx.globalAlpha /= compact ? 0.42 : 0.58;
+    }
+
+    drawTitleFaceShadow(ctx, game, x, y, w, h, compact) {
+      const faceW = compact ? Math.min(230, w * 0.72) : Math.min(410, w * 0.55);
+      const faceH = compact ? Math.min(220, h * 0.72) : Math.min(300, h * 0.9);
+      const cx = compact ? x + w * 0.52 : x + w * 0.74;
+      const cy = y + h * (compact ? 0.46 : 0.5);
+      const left = cx - faceW / 2;
+      const top = cy - faceH / 2;
+
+      ctx.save();
+      ctx.globalAlpha = compact ? 0.28 : 0.48;
+      ctx.fillStyle = LIGHT_ORANGE;
+      this.fillPixelPolygon(ctx, [
+        [left + faceW * 0.16, top + faceH * 0.16],
+        [left + faceW * 0.82, top + faceH * 0.08],
+        [left + faceW * 0.95, top + faceH * 0.42],
+        [left + faceW * 0.72, top + faceH * 0.9],
+        [left + faceW * 0.34, top + faceH * 0.94],
+        [left + faceW * 0.08, top + faceH * 0.48]
+      ]);
+
+      ctx.globalAlpha = compact ? 0.58 : 0.82;
+      ctx.fillStyle = BLACK;
+      this.fillPixelPolygon(ctx, [
+        [left + faceW * 0.1, top + faceH * 0.15],
+        [left + faceW * 0.52, top + faceH * 0.1],
+        [left + faceW * 0.42, top + faceH * 0.34],
+        [left + faceW * 0.16, top + faceH * 0.37]
+      ]);
+      this.fillPixelPolygon(ctx, [
+        [left + faceW * 0.52, top + faceH * 0.1],
+        [left + faceW * 0.9, top + faceH * 0.16],
+        [left + faceW * 0.86, top + faceH * 0.38],
+        [left + faceW * 0.56, top + faceH * 0.34]
+      ]);
+
+      ctx.globalAlpha = compact ? 0.54 : 0.9;
+      ctx.fillStyle = TITLE_HOT;
+      this.fillPixelPolygon(ctx, [
+        [left + faceW * 0.14, top + faceH * 0.36],
+        [left + faceW * 0.43, top + faceH * 0.42],
+        [left + faceW * 0.4, top + faceH * 0.48],
+        [left + faceW * 0.2, top + faceH * 0.48]
+      ]);
+      this.fillPixelPolygon(ctx, [
+        [left + faceW * 0.56, top + faceH * 0.42],
+        [left + faceW * 0.86, top + faceH * 0.36],
+        [left + faceW * 0.78, top + faceH * 0.5],
+        [left + faceW * 0.6, top + faceH * 0.49]
+      ]);
+
+      ctx.globalAlpha = compact ? 0.3 : 0.56;
+      ctx.fillStyle = TITLE_LIGHT;
+      thickLinePixels(ctx, left + faceW * 0.28, top + faceH * 0.66, left + faceW * 0.72, top + faceH * 0.62, compact ? 3 : 5);
+      thickLinePixels(ctx, left + faceW * 0.36, top + faceH * 0.76, left + faceW * 0.66, top + faceH * 0.78, compact ? 2 : 4);
+      ctx.fillStyle = BLACK;
+      thickLinePixels(ctx, left + faceW * 0.5, top + faceH * 0.46, left + faceW * 0.48, top + faceH * 0.64, compact ? 4 : 7);
+
+      ctx.globalAlpha = compact ? 0.2 : 0.34;
       ctx.fillStyle = ORANGE;
-      ctx.font = `${compact ? 20 : 24}px Courier New, monospace`;
-      ctx.fillText("橙侍サバイバー", x + 28, y + 18);
-      ctx.font = `${compact ? 16 : 18}px Courier New, monospace`;
-      ctx.fillText("斬って 血紋を 完成させろ", x + 28, y + 50);
-      ctx.font = `${compact ? 14 : 15}px Courier New, monospace`;
-      ctx.fillStyle = ORANGE;
-      ctx.fillText("WASD / 矢印: 移動", x + 30, y + 82);
-      ctx.fillStyle = ORANGE;
-      ctx.fillText("刀は自動で回転  敵を巻き込む", x + 30, y + 104);
-      ctx.fillText("経験玉を集めて刀を育てる", x + 30, y + 126);
-      if (!compact) {
-        const pulse = Math.floor(performance.now() / 180) % 2 === 0;
-        ctx.fillStyle = pulse ? ORANGE : LIGHT_ORANGE;
-        rect(ctx, x + boxW - 86, y + 74, 48, 2);
-        rect(ctx, x + boxW - 62, y + 50, 2, 48);
-        linePixels(ctx, x + boxW - 96, y + 100, x + boxW - 50, y + 54);
+      for (let i = 0; i < 9; i += 1) {
+        const yy = top + faceH * (0.22 + i * 0.07);
+        const xx = left + faceW * (0.12 + (i % 3) * 0.05);
+        rect(ctx, xx, yy, faceW * 0.76, 2);
       }
       ctx.restore();
+    }
+
+    drawRetroTitleCopy(ctx, game, x, y, w, h, compact) {
+      const lines = compact
+        ? ["てめぇらの血は、", "何色だぁ", "ああああああ"]
+        : ["てめぇらの血は、", "何色だぁああああああ"];
+      const fontSize = compact ? Math.max(25, Math.min(36, Math.floor(w / 11))) : Math.max(42, Math.min(66, Math.floor(w / 11.5)));
+      const lineH = Math.round(fontSize * (compact ? 1.06 : 1.0));
+      const titleX = x + (compact ? 22 : 36);
+      const titleY = y + (compact ? 34 : 44);
+      ctx.textBaseline = "top";
+      for (let i = 0; i < lines.length; i += 1) {
+        const line = lines[i];
+        const yy = titleY + i * lineH;
+        const skew = compact ? 0 : i === 0 ? -5 : 4;
+        ctx.font = `700 ${fontSize}px Courier New, monospace`;
+        ctx.fillStyle = BLACK;
+        ctx.fillText(line, titleX + 5 + skew, yy + 5);
+        ctx.fillStyle = TITLE_HOT;
+        ctx.fillText(line, titleX + 2 + skew, yy + 2);
+        ctx.fillStyle = i === 1 && !compact ? TITLE_LIGHT : ORANGE;
+        ctx.fillText(line, titleX + skew, yy);
+        if (!compact) {
+          ctx.fillStyle = TITLE_HOT;
+          rect(ctx, titleX + skew, yy + fontSize - 3, Math.min(w - 80, ctx.measureText(line).width), 3);
+        }
+      }
+
+      const subY = titleY + lines.length * lineH + (compact ? 18 : 24);
+      ctx.font = `${compact ? 14 : 16}px Courier New, monospace`;
+      ctx.fillStyle = TITLE_LIGHT;
+      ctx.fillText("斬って 血紋を 完成させろ", titleX, subY);
+      ctx.fillStyle = ORANGE;
+      ctx.fillText(compact ? "タップで斬り込む" : "CLICK / TAP で斬り込む", titleX, subY + (compact ? 24 : 28));
+
+      const buttonW = compact ? Math.min(w - 44, 260) : 340;
+      const buttonH = compact ? 46 : 50;
+      const buttonX = compact ? x + 22 : titleX;
+      const buttonY = Math.min(y + h - buttonH - 22, subY + (compact ? 56 : 64));
+      ctx.fillStyle = BLACK;
+      rect(ctx, buttonX, buttonY, buttonW, buttonH);
+      ctx.fillStyle = Math.floor(performance.now() / 220) % 2 === 0 ? ORANGE : TITLE_HOT;
+      this.drawFrame(ctx, buttonX, buttonY, buttonW, buttonH, 2);
+      ctx.font = `${compact ? 16 : 18}px Courier New, monospace`;
+      ctx.fillStyle = TITLE_LIGHT;
+      ctx.fillText("START", buttonX + 22, buttonY + 14);
+      ctx.fillStyle = compact ? ORANGE : LIGHT_ORANGE;
+      ctx.fillText(compact ? "斬り込む" : "自動回転する刀で敵を巻き込む", buttonX + (compact ? 100 : 104), buttonY + 15);
+
+      if (!compact) {
+        ctx.fillStyle = LIGHT_ORANGE;
+        ctx.font = "14px Courier New, monospace";
+        ctx.fillText("WASD / 矢印: 移動", buttonX + buttonW + 28, buttonY + 16);
+      }
+    }
+
+    fillPixelPolygon(ctx, points) {
+      ctx.beginPath();
+      ctx.moveTo(Math.round(points[0][0]), Math.round(points[0][1]));
+      for (let i = 1; i < points.length; i += 1) {
+        ctx.lineTo(Math.round(points[i][0]), Math.round(points[i][1]));
+      }
+      ctx.closePath();
+      ctx.fill();
     }
 
     drawNoticeToast(ctx, game) {
@@ -3995,7 +4291,9 @@
     reset() {
       this.input.clear();
       this.player = new Player(this.playArea.left + this.playArea.width / 2, this.playArea.top + this.playArea.height / 2);
+      this.applyDeviceComfort();
       this.spawner = new EnemySpawner();
+      this.spawner.bossTimer = 24 + this.difficultyProfile().bossDelay;
       this.dropManager = new DropManager(this);
       this.enemies = [];
       this.enemyGrid = new SpatialGrid(96);
@@ -4024,6 +4322,7 @@
       this.guideTimer = this.guideMaxTimer;
       this.guideDismissed = false;
       this.startGrace = 2.2;
+      this.damageInvuln = 0;
       this.killPulse = 0;
       this.playerDamagePulse = 0;
       this.objectivePulse = 0;
@@ -4064,6 +4363,43 @@
       }
     }
 
+    difficultyProfile() {
+      const w = this.playArea.width;
+      const h = this.playArea.height;
+      const narrow = clamp((560 - w) / 220, 0, 1);
+      const short = clamp((420 - h) / 180, 0, 1);
+      const compact = Math.max(narrow, short);
+      return {
+        compact,
+        spawnRate: 1 - compact * 0.32,
+        maxEnemies: Math.round(34 - compact * 12),
+        enemySpeed: 1 - compact * 0.08,
+        enemyDamage: 1 - compact * 0.15,
+        safeSpawnDistance: 150 + compact * 90,
+        openingSafeDistance: 210 + compact * 90,
+        bossDelay: compact * 8
+      };
+    }
+
+    enemyLevelForSpawn() {
+      const profile = this.difficultyProfile();
+      return Math.max(1, Math.floor(this.level - profile.compact * 2));
+    }
+
+    applyEnemyProfile(enemy, profile = this.difficultyProfile()) {
+      enemy.def.damage = Math.max(1, Math.floor(enemy.def.damage * profile.enemyDamage));
+      enemy.def.speed *= profile.enemySpeed;
+    }
+
+    applyDeviceComfort() {
+      const profile = this.difficultyProfile();
+      if (profile.compact <= 0) return;
+      this.player.maxHp = Math.round(this.player.maxHp * (1 + profile.compact * 0.18));
+      this.player.hp = this.player.maxHp;
+      this.player.speed += profile.compact * 12;
+      this.player.katana.horizontalPixels += Math.round(profile.compact * 4);
+    }
+
     rebuildCollectibleGrid() {
       if (!this.collectibleGrid) this.collectibleGrid = new SpatialGrid(96);
       this.collectibleGrid.clear();
@@ -4098,6 +4434,7 @@
       this.noticeTimer = Math.max(0, this.noticeTimer - dt);
       this.guideTimer = Math.max(0, this.guideTimer - dt);
       this.startGrace = Math.max(0, this.startGrace - dt);
+      this.damageInvuln = Math.max(0, this.damageInvuln - dt);
       this.killPulse = Math.max(0, this.killPulse - dt);
       this.playerDamagePulse = Math.max(0, this.playerDamagePulse - dt);
       this.objectivePulse = Math.max(0, this.objectivePulse - dt);
@@ -4247,7 +4584,10 @@
         this.effects.push({ type: "enemyPower", x: this.player.x, y: this.player.y, life: 0.18, maxLife: 0.18, size: 30 });
         return;
       }
+      if (this.damageInvuln > 0) return;
+      const profile = this.difficultyProfile();
       this.player.hp -= amount;
+      this.damageInvuln = 0.28 + profile.compact * 0.18;
       this.sfx.hurt();
       this.screenShake.add(shake, shakeTime);
       this.playerDamagePulse = Math.max(this.playerDamagePulse, 0.42);
@@ -4279,15 +4619,17 @@
       if (this.bossAttacks.length >= 28) this.bossAttacks.shift();
       const cleanDir = normalized(dir.x, dir.y);
       const headBroken = owner.parts.head === false;
-      const warning = headBroken ? 0.42 : 0.3;
+      const warning = headBroken ? 0.36 + Math.random() * 0.34 : 0.3;
+      const adjustedLength = headBroken ? length * (0.75 + Math.random() * 0.35) : length;
+      const adjustedDamage = headBroken ? damageScale * 0.72 : damageScale;
       this.bossAttacks.push({
         owner,
         x: owner.x,
         y: owner.y,
         dir: cleanDir,
-        length,
+        length: adjustedLength,
         width,
-        damageScale,
+        damageScale: adjustedDamage,
         warning,
         maxWarning: warning,
         life: warning + 0.16,
@@ -4625,7 +4967,9 @@
         x = bounds.left - 42;
         y = bounds.top + Math.random() * bounds.height;
       }
-      this.enemies.push(new Enemy("levelBoss", x, y, rank));
+      const boss = new Enemy("levelBoss", x, y, rank, this.enemyLevelForSpawn());
+      this.applyEnemyProfile(boss);
+      this.enemies.push(boss);
       this.notice = `第${rank}段階ボス`;
       this.noticeTimer = 2.4;
       this.sfx.boss();
@@ -5331,6 +5675,9 @@
       mid.parts.head = false;
       mid.parts.weaponMain = false;
       mid.parts.leftLeg = false;
+      mid.headlessChaosTimer = 4.5;
+      mid.headlessMoveAngle = Math.random() * FULL_SPIN;
+      mid.headlessAttackJitter = 0.8;
       const boss = new Enemy("levelBoss", game.player.x + 120, game.player.y + 12, 3, game.level);
       boss.parts.horn = false;
       boss.parts.weaponSub = false;
