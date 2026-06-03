@@ -314,6 +314,9 @@
         wallPower: 0,
         absorb: 0,
         absorbLevel: 0,
+        bloodSpray: 0,
+        bloodImpact: 0,
+        bloodImpactLevel: 0,
         elements: {}
       };
       this.xpCombo = 0;
@@ -330,8 +333,11 @@
         dismember: 0.055,
         wall: 0.08,
         absorb: 0.04,
+        bloodSpray: 0.032,
+        bloodImpact: 0.045,
         element: 0.035,
-        critical: 0.05
+        critical: 0.05,
+        bloodComplete: 0.6
       };
       window.addEventListener("keydown", () => this.unlock(), { once: true });
       window.addEventListener("pointerdown", () => this.unlock(), { once: true });
@@ -370,6 +376,15 @@
         this.playAbsorbBatch(this.pending.absorb, this.pending.absorbLevel);
         this.pending.absorb = 0;
         this.pending.absorbLevel = 0;
+      }
+      if (this.pending.bloodSpray > 0) {
+        this.playBloodSprayBatch(this.pending.bloodSpray);
+        this.pending.bloodSpray = 0;
+      }
+      if (this.pending.bloodImpact > 0) {
+        this.playBloodImpactBatch(this.pending.bloodImpact, this.pending.bloodImpactLevel);
+        this.pending.bloodImpact = 0;
+        this.pending.bloodImpactLevel = 0;
       }
       for (const kind of Object.keys(this.pending.elements)) {
         this.playElementBatch(kind, this.pending.elements[kind]);
@@ -410,6 +425,15 @@
       this.pending.absorbLevel = Math.max(this.pending.absorbLevel, level);
     }
 
+    queueBloodSpray(count = 1) {
+      this.pending.bloodSpray = Math.min(10, this.pending.bloodSpray + count);
+    }
+
+    queueBloodImpact(count = 1, level = 1) {
+      this.pending.bloodImpact = Math.min(14, this.pending.bloodImpact + count);
+      this.pending.bloodImpactLevel = Math.max(this.pending.bloodImpactLevel, level);
+    }
+
     queueElement(kind) {
       this.pending.elements[kind] = Math.min(5, (this.pending.elements[kind] || 0) + 1);
     }
@@ -429,8 +453,15 @@
         }
         this.context = new AudioContextClass();
         this.masterGain = this.context.createGain();
+        this.compressor = this.context.createDynamicsCompressor();
+        this.compressor.threshold.value = -22;
+        this.compressor.knee.value = 18;
+        this.compressor.ratio.value = 4;
+        this.compressor.attack.value = 0.006;
+        this.compressor.release.value = 0.18;
         this.masterGain.gain.value = 0.18;
-        this.masterGain.connect(this.context.destination);
+        this.masterGain.connect(this.compressor);
+        this.compressor.connect(this.context.destination);
       }
       if (this.context.state === "suspended") this.context.resume();
       return this.context;
@@ -585,6 +616,23 @@
       if (count >= 3) this.playTone(1100 * pitch, 0.045, { type: "square", volume: 0.03, delay: 0.03, endFreq: 1500 * pitch });
     }
 
+    playBloodSprayBatch(count) {
+      if (!this.canPlay("bloodSpray")) return;
+      const force = Math.min(1.8, 0.9 + count * 0.12);
+      this.playNoise(0.075, { volume: 0.085 * force, frequency: 420, q: 0.8 });
+      this.playNoise(0.038, { volume: 0.055 * force, frequency: 1450, q: 1.4, delay: 0.012 });
+    }
+
+    playBloodImpactBatch(count, level) {
+      if (!this.canPlay("bloodImpact")) return;
+      const pitch = 1 + Math.min(0.72, count * 0.045 + level * 0.018);
+      const force = Math.min(1.7, 0.85 + count * 0.08 + level * 0.025);
+      this.playTone(210 * pitch, 0.09, { type: "sawtooth", volume: 0.07 * force, endFreq: 420 * pitch });
+      this.playNoise(0.08, { volume: 0.052 * force, frequency: 780 * pitch, q: 0.75, delay: 0.018 });
+      this.playTone(92, 0.075, { type: "square", volume: 0.056 * force, delay: 0.052, endFreq: 58 });
+      if (level >= 8) this.playTone(1240 * pitch, 0.075, { type: "triangle", volume: 0.05, delay: 0.075, endFreq: 1740 * pitch });
+    }
+
     playElementBatch(kind, count) {
       if (!this.canPlay("element")) return;
       const boost = Math.min(1.25, 1 + count * 0.06);
@@ -611,6 +659,19 @@
       });
       this.playNoise(0.12, { volume: 0.046, frequency: 2200, q: 0.8, delay: 0.16, priority: true });
       this.playTone(1568, 0.12, { type: "triangle", volume: 0.06, delay: 0.23, endFreq: 2093, priority: true });
+    }
+
+    bloodComplete() {
+      if (!this.canPlay("bloodComplete", true)) return;
+      this.playTone(48, 0.32, { type: "sawtooth", volume: 0.13, endFreq: 36, priority: true });
+      this.playNoise(0.18, { volume: 0.1, frequency: 360, q: 0.7, priority: true });
+      this.playTone(96, 0.14, { type: "square", volume: 0.11, delay: 0.12, endFreq: 72, priority: true });
+      this.playTone(1568, 0.09, { type: "triangle", volume: 0.075, delay: 0.24, endFreq: 2352, priority: true });
+      [330, 440, 660, 880, 1320].forEach((freq, index) => {
+        this.playTone(freq, 0.13, { type: index < 2 ? "sawtooth" : "triangle", volume: 0.064, delay: 0.38 + index * 0.075, priority: true });
+      });
+      this.playTone(70, 0.18, { type: "square", volume: 0.1, delay: 0.74, endFreq: 52, priority: true });
+      this.playNoise(0.28, { volume: 0.05, frequency: 980, q: 0.55, delay: 0.82, priority: true });
     }
 
     hurt() {
@@ -1487,6 +1548,63 @@
       }
     }
 
+    drawCenteredArtwork(ctx, frameX, frameY, frameW, frameH, t = 0) {
+      if (this.cells.length === 0) return;
+      const pad = Math.max(18, Math.min(frameW, frameH) * 0.11);
+      const baseScale = Math.max(2, Math.floor(Math.min((frameW - pad * 2) / this.patternWidth, (frameH - pad * 2) / this.patternHeight)));
+      const appear = clamp(t / 0.7, 0, 1);
+      const pulse = 1 + Math.sin(Math.min(1.2, t) * Math.PI) * 0.08 * (1 - clamp((t - 1.2) / 1.4, 0, 1));
+      const scale = Math.max(2, Math.floor(baseScale * (0.86 + appear * 0.14) * pulse));
+      const artW = this.patternWidth * scale;
+      const artH = this.patternHeight * scale;
+      const ox = Math.round(frameX + (frameW - artW) / 2);
+      const oy = Math.round(frameY + (frameH - artH) / 2 + Math.min(28, frameH * 0.05));
+      ctx.save();
+      ctx.fillStyle = BLACK;
+      ctx.globalAlpha = 0.44;
+      rect(ctx, ox - scale, oy + scale, artW + scale * 2, artH + scale * 2);
+      ctx.globalAlpha = 1;
+      for (const cell of this.cells) {
+        const lx = ox + cell.col * scale;
+        const ly = oy + cell.row * scale;
+        const effect = this.completionCellEffect(cell, t);
+        ctx.fillStyle = effect.bright ? BLOOD_BRIGHT : effect.wet ? BLOOD_WET : this.bloodTone(cell, 1, true);
+        rect(ctx, lx, ly, scale, scale);
+        if (scale >= 6 && effect.bright) rect(ctx, lx + Math.floor(scale * 0.25), ly + Math.floor(scale * 0.25), Math.max(2, Math.floor(scale * 0.5)), 2);
+      }
+      this.drawCompletionGlyph(ctx, ox, oy, scale, t);
+      ctx.restore();
+    }
+
+    completionCellEffect(cell, t) {
+      const accent = cell.mark === "H" || cell.mark === "A";
+      const flash = t < 0.38 && Math.floor(t * 26 + cell.col + cell.row) % 3 === 0;
+      const latePulse = accent && t > 0.45 && Math.floor((t - 0.45) * 8) % 2 === 0;
+      return { bright: flash || latePulse, wet: accent || cell.mark === "M" };
+    }
+
+    drawCompletionGlyph(ctx, ox, oy, scale, t) {
+      const effect = this.preset.completionEffect || "curseMark";
+      const cx = ox + this.patternWidth * scale / 2;
+      const cy = oy + this.patternHeight * scale / 2;
+      if (t < 0.28) return;
+      ctx.fillStyle = BLOOD_BRIGHT;
+      if (effect === "bloodMoon") {
+        const r = Math.max(8, scale * 5);
+        dashedLinePixels(ctx, cx - r, cy, cx + r, cy, Math.max(2, scale / 2), Math.max(5, scale));
+        dashedLinePixels(ctx, cx, cy - r, cx, cy + r, Math.max(2, scale / 2), Math.max(5, scale));
+        linePixels(ctx, cx - r * 0.8, cy + r * 0.7, cx + r * 0.8, cy - r * 0.7);
+      } else if (effect === "slashSeal") {
+        thickLinePixels(ctx, cx - scale * 10, cy + scale * 8, cx + scale * 10, cy - scale * 8, Math.max(2, scale * 0.7));
+        rect(ctx, cx + scale * 8, cy - scale * 9, scale * 2, scale * 2);
+      } else {
+        rect(ctx, cx - scale * 4, cy - scale * 8, scale * 8, scale);
+        rect(ctx, cx - scale * 4, cy + scale * 7, scale * 8, scale);
+        rect(ctx, cx - scale * 8, cy - scale * 1, scale * 3, scale);
+        rect(ctx, cx + scale * 5, cy - scale * 1, scale * 3, scale);
+      }
+    }
+
     progress() {
       return this.progressValue;
     }
@@ -1631,7 +1749,7 @@
           size: 2 + Math.floor(Math.random() * (boss ? 6 : critical ? 4 : 3))
         });
       }
-      if (targetCells.length > 0) game.sfx.queueAbsorb(Math.min(boss ? 7 : 4, targetCells.length), 2 + targetCells.length + Math.floor(bloodPower / 8));
+      if (targetCells.length > 0) game.sfx.queueBloodSpray(boss ? 5 : heavy || critical ? 3 : 1);
       return result;
     }
 
@@ -1681,16 +1799,22 @@
           size: 2 + Math.floor(Math.random() * 3)
         });
       }
-      if (targetCells.length > 0) game.sfx.queueAbsorb(Math.min(5, targetCells.length), 2 + Math.floor(comboCount / 4));
+      if (targetCells.length > 0) game.sfx.queueBloodSpray(Math.min(6, 2 + Math.floor(comboCount / 4)));
       return result.completed;
     }
 
-    update(dt) {
+    update(dt, game) {
       let trailWrite = 0;
       for (let i = 0; i < this.trails.length; i += 1) {
         const trail = this.trails[i];
         trail.delay = Math.max(0, (trail.delay || 0) - dt);
+        const previousT = clamp(1 - trail.life / trail.maxLife, 0, 1);
         trail.life -= dt;
+        const currentT = clamp(1 - trail.life / trail.maxLife, 0, 1);
+        if (!trail.playedImpact && previousT < 0.88 && currentT >= 0.88 && game && game.sfx) {
+          trail.playedImpact = true;
+          game.sfx.queueBloodImpact(trail.kind === "boss" ? 4 : trail.kind === "combo" ? 3 : 1, trail.kind === "boss" ? 12 : trail.kind === "critical" ? 10 : trail.kind === "combo" ? 9 : 4);
+        }
         if (trail.life > 0) this.trails[trailWrite++] = trail;
       }
       this.trails.length = trailWrite;
@@ -3932,7 +4056,7 @@
       rect(ctx, frameX + frameW - 14, frameY + 12, 2, frameH - 24);
       ctx.save();
       ctx.globalAlpha = 0.82 + pulse * 0.18;
-      game.bloodGoal.draw(ctx);
+      game.bloodGoal.drawCenteredArtwork(ctx, frameX + 22, frameY + 22, frameW - 44, frameH - 44, t);
       ctx.restore();
       ctx.fillStyle = BLACK;
       rect(ctx, game.width / 2 - 146, UI_HEIGHT + 22, 292, 104);
@@ -4596,7 +4720,7 @@
       this.effects.length = effectWrite;
       this.trimLegacyEffects();
       this.effectManager.update(dt);
-      this.bloodManager.update(dt);
+      this.bloodManager.update(dt, this);
       this.sfx.update();
 
       if (!this.gameCleared && this.player.hp <= 0) this.enterGameOver();
@@ -4607,7 +4731,7 @@
       this.clearTimer += dt;
       this.clearChoiceCooldown = Math.max(0, this.clearChoiceCooldown - dt);
       if (this.showClearResult) {
-        this.bloodManager.update(dt);
+        this.bloodManager.update(dt, this);
         this.effectManager.update(dt * 0.35);
         this.sfx.update();
         return;
@@ -4625,7 +4749,7 @@
           this.input.clear();
         }
       }
-      this.bloodManager.update(dt);
+      this.bloodManager.update(dt, this);
       this.effectManager.update(dt * 0.35);
       this.sfx.update();
       let effectWrite = 0;
@@ -4822,7 +4946,7 @@
       this.notice = "血紋完成";
       this.noticeTimer = 0;
       this.screenShake.clear();
-      this.sfx.levelUp();
+      this.sfx.bloodComplete();
       this.effects.push({ type: "enemyPower", x: this.player.x, y: this.player.y, life: 1.0, maxLife: 1.0, size: 96 });
     }
 
