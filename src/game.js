@@ -87,8 +87,7 @@
     xpParticles: 3,
     levelParticles: 30,
     maxBursts: 44,
-    maxLegacyEffects: 150,
-    shakeScale: 0.86
+    maxLegacyEffects: 150
   };
   const CRITICAL_DEFAULTS = {
     chance: 0.08,
@@ -818,6 +817,28 @@
       this.burst({ type: "dismember", x, y, dir, part, life: 0.22, maxLife: 0.22, size: 22 });
     }
 
+    bossDismember(x, y, dir, part, scale = 1) {
+      const side = { x: -dir.y, y: dir.x };
+      const count = Math.floor(34 * scale);
+      for (let i = 0; i < count; i += 1) {
+        const angle = Math.atan2(dir.y, dir.x) + (Math.random() - 0.5) * 2.8;
+        const speed = 130 + Math.random() * 310 * scale;
+        const size = i % 3 === 0 ? 5 : 3;
+        this.particle(
+          x + side.x * (Math.random() - 0.5) * 18 * scale,
+          y + side.y * (Math.random() - 0.5) * 18 * scale,
+          Math.cos(angle) * speed + side.x * (Math.random() - 0.5) * 170,
+          Math.sin(angle) * speed + side.y * (Math.random() - 0.5) * 170,
+          0.24 + Math.random() * 0.42,
+          size,
+          90,
+          4.2
+        );
+      }
+      this.burst({ type: "bossDismember", x, y, dir, part, life: 0.62, maxLife: 0.62, size: 44 * scale });
+      this.burst({ type: "bossDismemberText", x, y: y - 42 * scale, part, life: 0.86, maxLife: 0.86, size: scale });
+    }
+
     wallImpact(x, y, normal, power) {
       const side = { x: -normal.y, y: normal.x };
       const count = 12 + Math.min(14, Math.floor(power * 8));
@@ -947,6 +968,29 @@
         thickLinePixels(ctx, burst.x, burst.y, burst.x + dir.x * size + side.x * 6, burst.y + dir.y * size + side.y * 6, 4);
         rect(ctx, burst.x + dir.x * size - 4, burst.y + dir.y * size - 4, burst.part && burst.part.includes("Leg") ? 5 : 8, burst.part && burst.part.includes("Leg") ? 8 : 5);
         dashedLinePixels(ctx, burst.x - side.x * size * 0.4, burst.y - side.y * size * 0.4, burst.x + side.x * size * 0.4, burst.y + side.y * size * 0.4, 3, 6);
+      } else if (burst.type === "bossDismember") {
+        const dir = burst.dir;
+        const side = { x: -dir.y, y: dir.x };
+        const size = burst.size * (0.45 + grow * 1.35);
+        ctx.fillStyle = BLOOD_BRIGHT;
+        thickLinePixels(ctx, burst.x - side.x * size * 0.78 - dir.x * size * 0.32, burst.y - side.y * size * 0.78 - dir.y * size * 0.32, burst.x + side.x * size * 0.78 + dir.x * size * 0.44, burst.y + side.y * size * 0.78 + dir.y * size * 0.44, 5);
+        ctx.fillStyle = ORANGE;
+        rect(ctx, burst.x - size, burst.y - size, size * 2, 3);
+        rect(ctx, burst.x - size, burst.y + size, size * 2, 3);
+        rect(ctx, burst.x - size, burst.y - size, 3, size * 2);
+        rect(ctx, burst.x + size, burst.y - size, 3, size * 2);
+        for (let i = 0; i < 10; i += 1) {
+          const angle = FULL_SPIN * i / 10 + grow * 1.6;
+          rect(ctx, burst.x + Math.cos(angle) * size * 0.82 - 3, burst.y + Math.sin(angle) * size * 0.82 - 3, 6, 6);
+        }
+      } else if (burst.type === "bossDismemberText") {
+        const label = bossPartLabel(burst.part);
+        ctx.fillStyle = BLOOD_BRIGHT;
+        ctx.font = `${Math.round(20 * burst.size + grow * 6)}px Courier New, monospace`;
+        ctx.fillText(`${label}破壊`, burst.x - label.length * 10 - 20, burst.y - grow * 24);
+        ctx.fillStyle = ORANGE;
+        ctx.font = `${Math.round(13 * burst.size)}px Courier New, monospace`;
+        ctx.fillText("攻撃弱体", burst.x - 34, burst.y + 28 - grow * 24);
       } else if (burst.type === "wallImpact") {
         const size = burst.size * (0.4 + grow);
         const normal = burst.normal;
@@ -971,13 +1015,11 @@
     }
 
     add(strength, duration) {
-      this.strength = Math.max(this.strength, strength);
-      this.duration = Math.max(this.duration, duration);
-      this.time = Math.max(this.time, duration);
+      this.clear();
     }
 
     update(dt) {
-      this.time = Math.max(0, this.time - dt);
+      this.clear();
     }
 
     clear() {
@@ -987,13 +1029,7 @@
     }
 
     offset() {
-      if (this.time <= 0 || this.duration <= 0) return { x: 0, y: 0 };
-      const t = this.time / this.duration;
-      const power = this.strength * EFFECT_QUALITY.shakeScale * t * t;
-      return {
-        x: (Math.random() * 2 - 1) * power,
-        y: (Math.random() * 2 - 1) * power
-      };
+      return { x: 0, y: 0 };
     }
   }
 
@@ -1636,6 +1672,25 @@
       bucket.push(entity);
     }
 
+    queryCircle(x, y, radius) {
+      const minX = Math.floor((x - radius) / this.cellSize);
+      const maxX = Math.floor((x + radius) / this.cellSize);
+      const minY = Math.floor((y - radius) / this.cellSize);
+      const maxY = Math.floor((y + radius) / this.cellSize);
+      const results = [];
+      const radiusSq = radius * radius;
+      for (let cy = minY; cy <= maxY; cy += 1) {
+        for (let cx = minX; cx <= maxX; cx += 1) {
+          const bucket = this.cells.get(`${cx},${cy}`);
+          if (!bucket) continue;
+          for (const entity of bucket) {
+            if (distanceSq(x, y, entity.x, entity.y) <= radiusSq) results.push(entity);
+          }
+        }
+      }
+      return results;
+    }
+
     forEachCircle(x, y, radius, fn) {
       const minX = Math.floor((x - radius) / this.cellSize);
       const maxX = Math.floor((x + radius) / this.cellSize);
@@ -1703,6 +1758,21 @@
 
   function isBossType(type) {
     return type === "midBoss" || type === "midBossArcher" || type === "levelBoss";
+  }
+
+  function bossPartLabel(part) {
+    const labels = {
+      head: "頭部",
+      body: "胴",
+      leftArm: "左腕",
+      rightArm: "右腕",
+      leftLeg: "左脚",
+      rightLeg: "右脚",
+      weaponMain: "主武器",
+      weaponSub: "副武器",
+      horn: "角"
+    };
+    return labels[part] || "部位";
   }
 
   function attributeColor(id, variant = "main") {
@@ -2703,8 +2773,17 @@
       if (!["farmer", "spear", "sword", "archer", "blinkNinja", "midBoss", "midBossArcher", "levelBoss"].includes(this.type)) return false;
       const alive = Object.keys(this.parts).filter((part) => this.parts[part]);
       if (alive.length === 0) return false;
+      const boss = isBossType(this.type);
       let chance = 0.08 + amount / Math.max(80, this.def.hp * 2);
-      if (this.type === "midBoss" || this.type === "midBossArcher" || this.type === "levelBoss") chance *= 0.45;
+      if (boss) {
+        const hpRatio = clamp(this.hp / this.def.hp, 0, 1);
+        chance = 0.1 + amount / Math.max(90, this.def.hp * 1.15);
+        if (hpRatio < 0.68) chance += 0.06;
+        if (hpRatio < 0.38) chance += 0.08;
+        if (context.isCritical) chance += 0.18;
+        if (context.sourceType === "katana" && amount >= this.def.hp * 0.045) chance += 0.08;
+        chance = Math.min(chance, this.type === "levelBoss" ? 0.48 : 0.58);
+      }
       if (context.sourceType === "wall") chance += 0.38;
       if (context.isCritical) chance += context.dismemberChanceBonus ?? CRITICAL_DEFAULTS.dismemberChanceBonus;
       if (this.freezeTime > 0) chance += 0.18;
@@ -2716,6 +2795,20 @@
       this.flash = 0.22;
       game.sfx.queueDismember();
       game.effectManager.dismember(this.x, this.y, dir, part);
+      if (boss) {
+        const scale = this.type === "levelBoss" ? 1.35 + this.rank * 0.08 : 1.05;
+        game.effectManager.bossDismember(this.x, this.y, dir, part, scale);
+        game.requestHitStop(this.type === "levelBoss" ? 0.07 : 0.055);
+        game.killPulse = Math.max(game.killPulse, 0.38);
+        game.effects.push({
+          type: "bossBreakPop",
+          x: this.x,
+          y: this.y - this.radius - 28,
+          life: 0.92,
+          maxLife: 0.92,
+          text: `${bossPartLabel(part)}破壊`
+        });
+      }
       return part;
     }
 
@@ -2938,6 +3031,40 @@
       if (this.burnTime > 0) {
         rect(ctx, x - 2, y - 17, 4, 4);
         rect(ctx, x + 3, y - 13, 3, 3);
+      }
+      if (isBossType(this.type)) this.drawBossBreakScars(ctx, x, y, scale);
+    }
+
+    drawBossBreakScars(ctx, x, y, scale) {
+      const marks = [];
+      if (this.parts.head === false) marks.push({ x: 0, y: -9, w: 16, h: 3, cut: "h" });
+      if (this.parts.body === false) marks.push({ x: 0, y: -1, w: 22, h: 4, cut: "x" });
+      if (this.parts.leftArm === false) marks.push({ x: -12, y: -1, w: 9, h: 11, cut: "v" });
+      if (this.parts.rightArm === false) marks.push({ x: 12, y: -1, w: 9, h: 11, cut: "v" });
+      if (this.parts.leftLeg === false) marks.push({ x: -7, y: 9, w: 9, h: 8, cut: "h" });
+      if (this.parts.rightLeg === false) marks.push({ x: 7, y: 9, w: 9, h: 8, cut: "h" });
+      if (this.parts.weaponMain === false) marks.push({ x: 18, y: -13, w: 16, h: 8, cut: "weapon" });
+      if (this.parts.weaponSub === false) marks.push({ x: -18, y: -10, w: 14, h: 7, cut: "weapon" });
+      if (this.parts.horn === false) marks.push({ x: 0, y: -24, w: 28, h: 5, cut: "h" });
+      if (marks.length === 0) return;
+
+      ctx.fillStyle = BLOOD_BRIGHT;
+      for (const mark of marks) {
+        const mx = x + mark.x * scale;
+        const my = y + mark.y * scale;
+        rect(ctx, mx - mark.w * scale / 2, my - mark.h * scale / 2, mark.w * scale, Math.max(2, 2 * scale));
+        if (mark.cut === "x") {
+          linePixels(ctx, mx - mark.w * scale / 2, my - mark.h * scale, mx + mark.w * scale / 2, my + mark.h * scale);
+          linePixels(ctx, mx + mark.w * scale / 2, my - mark.h * scale, mx - mark.w * scale / 2, my + mark.h * scale);
+        } else if (mark.cut === "v") {
+          rect(ctx, mx - mark.w * scale / 2, my, Math.max(2, 3 * scale), mark.h * scale);
+          rect(ctx, mx + mark.w * scale / 2 - 2, my, Math.max(2, 3 * scale), mark.h * scale);
+        } else if (mark.cut === "weapon") {
+          rect(ctx, mx - mark.w * scale / 2, my - mark.h * scale / 2, mark.w * scale, mark.h * scale);
+          ctx.fillStyle = ORANGE;
+          rect(ctx, mx - 2, my - 2, 4, 4);
+          ctx.fillStyle = BLOOD_BRIGHT;
+        }
       }
     }
 
@@ -3205,11 +3332,16 @@
       ctx.fillRect(0, 0, game.width, UI_HEIGHT);
       ctx.fillStyle = LIGHT_ORANGE;
       rect(ctx, 0, UI_HEIGHT - 2, game.width, 2);
-      this.drawHp(ctx, game, 16, 14, 220, 20);
       if (game.width < 560) {
-        this.drawObjectiveCompact(ctx, game, 16, 42, 220);
-        this.drawAttributesCompact(ctx, game, 246, 12, game.width - 254);
+        const attrSlot = 22;
+        const attrW = attrSlot * 5;
+        const attrX = Math.max(166, game.width - attrW - 8);
+        const statW = clamp(attrX - 26, 128, 220);
+        this.drawHp(ctx, game, 16, 14, statW, 20);
+        this.drawObjectiveCompact(ctx, game, 16, 42, statW);
+        this.drawAttributesCompact(ctx, game, attrX, 12, attrW);
       } else {
+        this.drawHp(ctx, game, 16, 14, 220, 20);
         this.drawAttributes(ctx, game, 276, 10);
         if (game.width >= 820) this.drawObjectiveProgress(ctx, game, Math.min(590, game.width - 430), 12, 244, 38);
         this.drawEnemyLevelFaces(ctx, game, game.width - 156, 10, 140);
@@ -4641,12 +4773,10 @@
       ctx.fillStyle = BLACK;
       ctx.fillRect(0, 0, this.width, this.height);
 
-      const shake = this.gameOver ? { x: 0, y: 0 } : this.screenShake.offset();
       ctx.save();
       ctx.beginPath();
       ctx.rect(this.playArea.left, this.playArea.top, this.playArea.width, this.playArea.height);
       ctx.clip();
-      ctx.translate(Math.round(shake.x), Math.round(shake.y));
       this.drawGrid(ctx);
       this.bloodGoal.draw(ctx);
       for (const orb of this.orbs) {
@@ -4708,6 +4838,10 @@
           this.drawObjectivePopEffect(ctx, effect);
           continue;
         }
+        if (effect.type === "bossBreakPop") {
+          this.drawBossBreakPopEffect(ctx, effect);
+          continue;
+        }
         const size = Math.round(effect.size * (effect.life / 0.16));
         rect(ctx, Math.round(effect.x) - size / 2, Math.round(effect.y) - size / 2, size, 1);
         rect(ctx, Math.round(effect.x) - size / 2, Math.round(effect.y) + size / 2, size, 1);
@@ -4767,6 +4901,20 @@
       ctx.fillText(effect.text, x - effect.text.length * 5, y);
       ctx.fillStyle = BLOOD_DARK;
       rect(ctx, x - 22, y + 19, Math.max(4, 44 * t), 2);
+      ctx.restore();
+    }
+
+    drawBossBreakPopEffect(ctx, effect) {
+      const t = clamp(effect.life / effect.maxLife, 0, 1);
+      const x = Math.round(effect.x);
+      const y = Math.round(effect.y - (1 - t) * 46);
+      ctx.save();
+      ctx.globalAlpha = clamp(t * 1.25, 0, 1);
+      ctx.fillStyle = BLOOD_BRIGHT;
+      ctx.font = "20px Courier New, monospace";
+      ctx.fillText(effect.text, x - effect.text.length * 8, y);
+      ctx.fillStyle = ORANGE;
+      rect(ctx, x - 38, y + 27, Math.max(5, 76 * t), 3);
       ctx.restore();
     }
 
@@ -5075,6 +5223,23 @@
       game.combo.timer = game.combo.window * 0.72;
       game.combo.displayTimer = 0.72;
       for (const id of ELEMENT_ITEMS) game.player.attributes.levels[id] = 1;
+    } else if (params.get("demo") === "bossbreak") {
+      game.guideDismissed = true;
+      game.noticeTimer = 0;
+      game.enemies = [];
+      const mid = new Enemy("midBoss", game.player.x - 90, game.player.y - 40, 1, game.level);
+      mid.parts.head = false;
+      mid.parts.weaponMain = false;
+      mid.parts.leftLeg = false;
+      const boss = new Enemy("levelBoss", game.player.x + 120, game.player.y + 12, 3, game.level);
+      boss.parts.horn = false;
+      boss.parts.weaponSub = false;
+      boss.parts.rightArm = false;
+      boss.parts.body = false;
+      game.enemies.push(mid, boss);
+      game.effectManager.bossDismember(mid.x, mid.y, { x: 1, y: 0 }, "weaponMain", 1.05);
+      game.effectManager.bossDismember(boss.x, boss.y, { x: -1, y: 0 }, "horn", 1.55);
+      game.effects.push({ type: "bossBreakPop", x: boss.x, y: boss.y - boss.radius - 28, life: 0.92, maxLife: 0.92, text: "角破壊" });
     }
   });
 })();
