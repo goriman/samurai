@@ -353,7 +353,9 @@
         bloodImpact: 0.045,
         element: 0.035,
         critical: 0.05,
-        bloodComplete: 0.6
+        bloodComplete: 0.6,
+        gameOver: 1.2,
+        gameOverDrone: 1.35
       };
     }
 
@@ -809,8 +811,9 @@
 
     hurt() {
       if (!this.canPlay("hurt", true)) return;
-      this.playTone(120, 0.11, { type: "square", volume: 0.08, endFreq: 70, priority: true });
-      this.playNoise(0.075, { volume: 0.05, frequency: 220, q: 0.9, priority: true });
+      this.playTone(74, 0.13, { type: "square", volume: 0.125, endFreq: 42, priority: true });
+      this.playNoise(0.09, { volume: 0.085, frequency: 260, q: 0.85, priority: true });
+      this.playTone(210, 0.055, { type: "sawtooth", volume: 0.054, delay: 0.012, endFreq: 96, priority: true });
     }
 
     item() {
@@ -823,6 +826,21 @@
       if (!this.canPlay("boss", true)) return;
       this.playTone(92, 0.16, { type: "sawtooth", volume: 0.075, endFreq: 58, priority: true });
       this.playTone(138, 0.12, { type: "square", volume: 0.045, delay: 0.08, endFreq: 104, priority: true });
+    }
+
+    gameOver() {
+      if (!this.canPlay("gameOver", true)) return;
+      this.playTone(96, 0.22, { type: "square", volume: 0.13, endFreq: 54, priority: true });
+      this.playNoise(0.24, { volume: 0.08, frequency: 170, q: 0.8, delay: 0.04, priority: true });
+      this.playTone(72, 0.42, { type: "sawtooth", volume: 0.095, delay: 0.18, endFreq: 38, priority: true });
+      this.playTone(48, 0.62, { type: "square", volume: 0.075, delay: 0.5, endFreq: 32, priority: true });
+      this.playNoise(0.42, { volume: 0.04, frequency: 520, q: 0.55, delay: 0.86, priority: true });
+    }
+
+    gameOverDrone() {
+      if (!this.canPlay("gameOverDrone", true)) return;
+      this.playTone(42, 0.55, { type: "sawtooth", volume: 0.045, endFreq: 36, priority: true });
+      this.playNoise(0.22, { volume: 0.026, frequency: 260, q: 0.65, delay: 0.08, priority: true });
     }
 
     setMuted(muted) {
@@ -4233,6 +4251,12 @@
       ctx.fillStyle = LIGHT_ORANGE;
       ctx.font = "15px Courier New, monospace";
       ctx.fillText("被弾", Math.max(18, game.player.x - 18), Math.max(UI_HEIGHT + 14, game.player.y - 40));
+      ctx.fillStyle = ORANGE;
+      const cx = Math.round(game.player.x);
+      const cy = Math.round(game.player.y);
+      const r = 18 + (1 - t) * 18;
+      linePixels(ctx, cx - r, cy - r, cx + r, cy + r);
+      linePixels(ctx, cx - r, cy + r, cx + r, cy - r);
     }
 
     drawObjectiveProgress(ctx, game, x, y, w, h) {
@@ -4333,6 +4357,7 @@
 
     drawGameOver(ctx, game) {
       const stats = game.runStats;
+      const pulse = 0.5 + Math.sin(game.gameOverTimer * 7) * 0.5;
       const panelW = Math.min(620, game.width - 48);
       const compactByWidth = panelW < 430;
       const safeBottom = compactByWidth ? 90 : 38;
@@ -4342,9 +4367,13 @@
       const y = Math.round(UI_HEIGHT + Math.max(18, (game.height - UI_HEIGHT - safeBottom - panelH) / 2));
       ctx.fillStyle = BLACK;
       rect(ctx, 0, UI_HEIGHT, game.width, game.height - UI_HEIGHT);
+      ctx.fillStyle = pulse > 0.62 ? BLOOD_DARK : LIGHT_ORANGE;
+      for (let yLine = UI_HEIGHT + 18; yLine < game.height; yLine += 28) {
+        rect(ctx, 0, yLine, game.width, 1);
+      }
       ctx.fillStyle = LIGHT_ORANGE;
       this.drawFrame(ctx, x, y, panelW, panelH, 2);
-      ctx.fillStyle = ORANGE;
+      ctx.fillStyle = pulse > 0.58 ? BLOOD_BRIGHT : ORANGE;
       ctx.font = `${compact ? 24 : 30}px Courier New, monospace`;
       ctx.fillText("ゲームオーバー", x + 34, y + 26);
       ctx.fillStyle = LIGHT_ORANGE;
@@ -4890,6 +4919,8 @@
       };
       this.continues = 0;
       this.gameOver = false;
+      this.gameOverTimer = 0;
+      this.gameOverDroneTimer = 0;
       this.gameCleared = false;
       this.audioResumeRequired = false;
       this.clearPulse = 0;
@@ -5038,6 +5069,7 @@
       this.tryStartAfterAudioUnlock();
       if (this.gameOver || this.gameCleared) {
         this.processPointerInput();
+        if (this.gameOver) this.updateGameOver(dt);
         if (this.gameCleared) this.updateClear(dt);
         if (this.input.pressed("r")) this.reset();
         if (this.gameOver && (this.input.pressed("enter") || this.input.pressed(" "))) this.startStrongNewGame();
@@ -5178,14 +5210,40 @@
       this.trimLegacyEffects();
     }
 
+    updateGameOver(dt) {
+      this.screenShake.clear();
+      this.gameOverTimer += dt;
+      this.gameOverDroneTimer -= dt;
+      if (this.gameOverTimer < 9 && this.gameOverDroneTimer <= 0) {
+        this.sfx.gameOverDrone();
+        this.gameOverDroneTimer = 1.45;
+      }
+      this.effectManager.update(dt * 0.35);
+      this.bloodManager.update(dt * 0.35, this);
+      this.sfx.update();
+      let effectWrite = 0;
+      for (let i = 0; i < this.effects.length; i += 1) {
+        const effect = this.effects[i];
+        effect.life -= dt * 0.42;
+        if (effect.life > 0) this.effects[effectWrite++] = effect;
+      }
+      this.effects.length = effectWrite;
+      this.trimLegacyEffects();
+    }
+
     enterGameOver() {
       if (this.gameOver) return;
       this.gameOver = true;
+      this.gameOverTimer = 0;
+      this.gameOverDroneTimer = 1.15;
       this.combo.end(this, "gameOver");
       this.screenShake.clear();
       this.hitStop = 0;
       this.notice = "倒れた";
       this.noticeTimer = 0;
+      this.sfx.gameOver();
+      this.effects.push({ type: "gameOverStatic", x: this.player.x, y: this.player.y, life: 1.8, maxLife: 1.8, size: 90 });
+      this.effects.push({ type: "objectivePop", x: this.player.x, y: this.player.y - 46, life: 1.0, maxLife: 1.0, text: "倒れた", strong: true });
     }
 
     recordDamage(amount) {
@@ -5240,9 +5298,10 @@
       this.damageInvuln = 0.28 + profile.compact * 0.18;
       this.sfx.hurt();
       this.screenShake.add(shake, shakeTime);
-      this.playerDamagePulse = Math.max(this.playerDamagePulse, 0.42);
-      this.requestHitStop(0.032);
-      this.effects.push({ x: this.player.x, y: this.player.y, life: 0.18, size: effectSize });
+      this.playerDamagePulse = Math.max(this.playerDamagePulse, 0.58);
+      this.requestHitStop(0.044);
+      this.effects.push({ type: "playerHurt", x: this.player.x, y: this.player.y, life: 0.38, maxLife: 0.38, size: effectSize + 16 });
+      this.effects.push({ x: this.player.x, y: this.player.y, life: 0.22, size: effectSize + 4 });
     }
 
     showObjectiveGain(x, y, delta, strong = false, label = "血紋") {
@@ -5397,16 +5456,23 @@
         ? `報酬吸収 ${absorbedCount}`
         : this.continues === 1 ? "次の血紋へ" : `第${this.continues + 1}血紋`;
       this.noticeTimer = 2.0;
+      this.spawnNextShapeAbsorbShow(absorbedRewards);
     }
 
     absorbFieldRewardsBeforeNextShape() {
       let orbCount = 0;
       let xpTotal = 0;
+      const samples = [];
+      const addSample = (x, y, kind = "xp") => {
+        if (samples.length >= 18) return;
+        samples.push({ x, y, kind });
+      };
       for (const orb of this.orbs) {
         if (orb.absorbed === "collected") continue;
         orb.absorbed = "collected";
         orbCount += 1;
         xpTotal += orb.value;
+        addSample(orb.x, orb.y, "xp");
       }
       if (xpTotal > 0) {
         this.runStats.xpOrbs += orbCount;
@@ -5421,6 +5487,7 @@
         item.absorbed = "collected";
         itemCount += 1;
         this.runStats.items += 1;
+        addSample(item.x, item.y, item.kind);
         if (item.kind === "heal") {
           this.player.heal(22);
         } else if (item.kind === "speed") {
@@ -5439,7 +5506,47 @@
         this.sfx.queueAbsorb(Math.min(12, total), Math.max(4, this.player.attributes.get("absorb")));
         this.sfx.item();
       }
-      return { orbs: orbCount, xp: xpTotal, items: itemCount, attributes: attributeCount, consumables: consumableCount };
+      return { orbs: orbCount, xp: xpTotal, items: itemCount, attributes: attributeCount, consumables: consumableCount, samples };
+    }
+
+    spawnNextShapeAbsorbShow(absorbedRewards) {
+      const total = absorbedRewards.orbs + absorbedRewards.items;
+      if (total <= 0) return;
+      const targetX = this.player.x;
+      const targetY = this.player.y;
+      const samples = absorbedRewards.samples && absorbedRewards.samples.length
+        ? absorbedRewards.samples
+        : [{ x: targetX - 80, y: targetY - 40, kind: "xp" }, { x: targetX + 80, y: targetY + 40, kind: "item" }];
+      for (const sample of samples) {
+        const color = ELEMENT_ITEMS.includes(sample.kind)
+          ? attributeColor(sample.kind, "main")
+          : CONSUMABLE_ITEMS.includes(sample.kind)
+            ? BLOOD_BRIGHT
+            : sample.kind === "heal"
+              ? ORANGE
+              : attributeColor("absorb", "main");
+        this.effects.push({
+          type: "rewardAbsorb",
+          x: sample.x,
+          y: sample.y,
+          targetX,
+          targetY,
+          color,
+          life: 0.72 + Math.random() * 0.18,
+          maxLife: 0.84,
+          size: 1
+        });
+      }
+      this.effects.push({ type: "enemyPower", x: targetX, y: targetY, life: 0.65, maxLife: 0.65, size: 52 + Math.min(70, total * 4) });
+      this.effects.push({
+        type: "objectivePop",
+        x: targetX,
+        y: targetY - 58,
+        life: 0.95,
+        maxLife: 0.95,
+        text: `報酬吸収 ${total}`,
+        strong: true
+      });
     }
 
     applyCriticalKillExplosion(originEnemy, dir) {
@@ -5968,6 +6075,18 @@
           this.drawPartBreakPopEffect(ctx, effect);
           continue;
         }
+        if (effect.type === "playerHurt") {
+          this.drawPlayerHurtEffect(ctx, effect);
+          continue;
+        }
+        if (effect.type === "rewardAbsorb") {
+          this.drawRewardAbsorbEffect(ctx, effect);
+          continue;
+        }
+        if (effect.type === "gameOverStatic") {
+          this.drawGameOverStaticEffect(ctx, effect);
+          continue;
+        }
         const size = Math.round(effect.size * (effect.life / 0.16));
         rect(ctx, Math.round(effect.x) - size / 2, Math.round(effect.y) - size / 2, size, 1);
         rect(ctx, Math.round(effect.x) - size / 2, Math.round(effect.y) + size / 2, size, 1);
@@ -6067,6 +6186,55 @@
       ctx.fillText(effect.text, x - effect.text.length * 4, y - 8);
       ctx.fillStyle = BLOOD_DARK;
       rect(ctx, x - 18, y + 14, 36 * t, 2);
+    }
+
+    drawPlayerHurtEffect(ctx, effect) {
+      const t = clamp(effect.life / effect.maxLife, 0, 1);
+      const grow = 1 - t;
+      const x = Math.round(effect.x);
+      const y = Math.round(effect.y);
+      const size = effect.size * (0.65 + grow * 0.9);
+      ctx.save();
+      ctx.globalAlpha = clamp(t * 1.45, 0, 1);
+      ctx.fillStyle = BLOOD_BRIGHT;
+      thickLinePixels(ctx, x - size, y - size * 0.6, x + size, y + size * 0.6, 4);
+      thickLinePixels(ctx, x - size * 0.85, y + size * 0.65, x + size * 0.85, y - size * 0.65, 3);
+      ctx.fillStyle = ORANGE;
+      rect(ctx, x - 5, y - 5, 10, 10);
+      ctx.restore();
+    }
+
+    drawRewardAbsorbEffect(ctx, effect) {
+      const t = clamp(effect.life / effect.maxLife, 0, 1);
+      const x = Math.round(effect.x);
+      const y = Math.round(effect.y);
+      const tx = Math.round(effect.targetX);
+      const ty = Math.round(effect.targetY);
+      ctx.save();
+      ctx.globalAlpha = clamp(t * 1.4, 0, 1);
+      ctx.fillStyle = effect.color || attributeColor("absorb", "main");
+      dashedLinePixels(ctx, x, y, tx, ty, 3, 8);
+      const ix = x + (tx - x) * (1 - t);
+      const iy = y + (ty - y) * (1 - t);
+      rect(ctx, ix - 4, iy - 4, 8, 8);
+      ctx.restore();
+    }
+
+    drawGameOverStaticEffect(ctx, effect) {
+      const t = clamp(effect.life / effect.maxLife, 0, 1);
+      const x = Math.round(effect.x);
+      const y = Math.round(effect.y);
+      const size = effect.size * (1 - t * 0.2);
+      ctx.save();
+      ctx.globalAlpha = clamp(t, 0, 0.85);
+      ctx.fillStyle = BLOOD_DARK;
+      for (let i = 0; i < 10; i += 1) {
+        const yy = y - size * 0.5 + i * (size / 9);
+        rect(ctx, x - size * 0.65 + (i % 2) * 8, yy, size * (0.45 + t * 0.3), 2);
+      }
+      ctx.fillStyle = ORANGE;
+      rect(ctx, x - 18, y - 2, 36 * t, 4);
+      ctx.restore();
     }
 
     drawAttackDebug(ctx) {
