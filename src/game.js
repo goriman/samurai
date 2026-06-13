@@ -1253,7 +1253,7 @@
         ctx.font = `${Math.round((17 + t * 3) * burst.size)}px Courier New, monospace`;
         ctx.fillText(`${label}破壊`, burst.x - label.length * 9 - 18, burst.y - (1 - t) * 12);
         if (burst.size >= 1.3) {
-          ctx.fillStyle = LIGHT_ORANGE;
+          ctx.fillStyle = ORANGE;
           ctx.font = `${Math.round(12 * burst.size)}px Courier New, monospace`;
           ctx.fillText("弱体", burst.x - 18, burst.y + 26 - (1 - t) * 12);
         }
@@ -4280,7 +4280,7 @@
       ctx.fillStyle = ORANGE;
       ctx.font = "18px Courier New, monospace";
       ctx.fillText("音声再開待ち", x + 24, y + 22);
-      ctx.fillStyle = LIGHT_ORANGE;
+      ctx.fillStyle = ORANGE;
       ctx.font = "14px Courier New, monospace";
       ctx.fillText("画面をタップ / キー入力", x + 24, y + 56);
       ctx.restore();
@@ -4400,7 +4400,7 @@
 
       const subY = titleY + lines.length * lineH + (compact ? 18 : 24);
       ctx.font = `${compact ? 14 : 16}px Courier New, monospace`;
-      ctx.fillStyle = TITLE_LIGHT;
+      ctx.fillStyle = ORANGE;
       ctx.fillText("斬って 血紋を 完成させろ", titleX, subY);
       ctx.fillStyle = ORANGE;
       ctx.fillText(compact ? "タップで斬り込む" : "CLICK / TAP で斬り込む", titleX, subY + (compact ? 24 : 28));
@@ -4414,13 +4414,13 @@
       ctx.fillStyle = Math.floor(performance.now() / 220) % 2 === 0 ? ORANGE : TITLE_HOT;
       this.drawFrame(ctx, buttonX, buttonY, buttonW, buttonH, 2);
       ctx.font = `${compact ? 16 : 18}px Courier New, monospace`;
-      ctx.fillStyle = TITLE_LIGHT;
+      ctx.fillStyle = ORANGE;
       ctx.fillText("START", buttonX + 22, buttonY + 14);
-      ctx.fillStyle = compact ? ORANGE : LIGHT_ORANGE;
+      ctx.fillStyle = ORANGE;
       ctx.fillText(compact ? "斬り込む" : "自動回転する刀で敵を巻き込む", buttonX + (compact ? 100 : 104), buttonY + 15);
 
       if (!compact) {
-        ctx.fillStyle = LIGHT_ORANGE;
+        ctx.fillStyle = ORANGE;
         ctx.font = "14px Courier New, monospace";
         ctx.fillText("WASD / 矢印: 移動", buttonX + buttonW + 28, buttonY + 16);
       }
@@ -4474,7 +4474,7 @@
       rect(ctx, inset, game.height - inset - 3, game.width - inset * 2, 3);
       rect(ctx, inset, UI_HEIGHT + inset, 3, game.height - UI_HEIGHT - inset * 2);
       rect(ctx, game.width - inset - 3, UI_HEIGHT + inset, 3, game.height - UI_HEIGHT - inset * 2);
-      ctx.fillStyle = LIGHT_ORANGE;
+      ctx.fillStyle = ORANGE;
       ctx.font = "15px Courier New, monospace";
       ctx.fillText("被弾", Math.max(18, game.player.x - 18), Math.max(UI_HEIGHT + 14, game.player.y - 40));
       ctx.fillStyle = ORANGE;
@@ -4494,7 +4494,7 @@
       ctx.fillStyle = ORANGE;
       const progressText = progress > 0 && progress < 0.01 ? "<1" : String(Math.floor(progress * 100));
       ctx.fillText(`血紋 ${progressText}%`, x + 10, y + 6);
-      ctx.fillStyle = LIGHT_ORANGE;
+      ctx.fillStyle = ORANGE;
       ctx.fillText(`斬 ${game.runStats.kills}`, x + w - 64, y + 6);
       const barX = x + 10;
       const barY = y + 25;
@@ -4513,6 +4513,7 @@
       ctx.fillStyle = ORANGE;
       ctx.fillText(`血紋 ${progressText}%`, x, y - 2);
       ctx.fillStyle = activePulse ? ORANGE : LIGHT_ORANGE;
+      ctx.fillStyle = ORANGE;
       ctx.fillText(`斬 ${game.runStats.kills}`, x + w - 44, y - 2);
       ctx.fillStyle = LIGHT_ORANGE;
       rect(ctx, x, y + 13, w, 2);
@@ -4550,11 +4551,11 @@
       rect(ctx, game.width / 2 - 146, UI_HEIGHT + 22, 292, 104);
       ctx.fillStyle = LIGHT_ORANGE;
       this.drawFrame(ctx, game.width / 2 - 146, UI_HEIGHT + 22, 292, 104, 1);
-      ctx.fillStyle = pulse > 0.45 ? BLOOD_BRIGHT : BLOOD_WET;
+      ctx.fillStyle = BLOOD_BRIGHT;
       ctx.font = "30px Courier New, monospace";
       ctx.fillText("血紋完成", game.width / 2 - 82, UI_HEIGHT + 34);
       ctx.font = "16px Courier New, monospace";
-      ctx.fillStyle = LIGHT_ORANGE;
+      ctx.fillStyle = ORANGE;
       ctx.fillText(`完成作品: ${game.bloodGoal.displayName()}`, game.width / 2 - 116, UI_HEIGHT + 74);
       if (game.clearChoiceVisible) {
         const boxW = compact ? Math.min(300, game.width - 52) : 240;
@@ -4572,11 +4573,11 @@
           const rowGap = compact ? 34 : 28;
           const choiceRect = { x: x + 18, y: y + 12 + i * rowGap, w: boxW - 36, h: compact ? 30 : 26 };
           game.uiHitZones.push({ type: "clearChoice", index: i, ...choiceRect });
-          ctx.fillStyle = i === game.clearChoiceIndex ? ORANGE : LIGHT_ORANGE;
+          ctx.fillStyle = ORANGE;
           ctx.fillText(`${i === game.clearChoiceIndex ? "▶" : " "} ${choices[i]}`, x + 30, y + 16 + i * rowGap);
         }
       } else if (t > 0.9) {
-        ctx.fillStyle = LIGHT_ORANGE;
+        ctx.fillStyle = ORANGE;
         ctx.fillText("作品を鑑賞中", game.width / 2 - 56, game.height - safeBottom);
       }
     }
@@ -4602,7 +4603,7 @@
       ctx.fillStyle = pulse > 0.58 ? BLOOD_BRIGHT : ORANGE;
       ctx.font = `${compact ? 24 : 30}px Courier New, monospace`;
       ctx.fillText("ゲームオーバー", x + 34, y + 26);
-      ctx.fillStyle = LIGHT_ORANGE;
+      ctx.fillStyle = ORANGE;
       ctx.font = `${compact ? 13 : 16}px Courier New, monospace`;
       ctx.fillText(compact ? "血紋は未完成" : "血紋は未完成のまま闇に沈んだ", x + 34, y + 66);
       const lines = compact ? [
@@ -4653,7 +4654,7 @@
       ctx.fillText("再挑戦 R", normalRect.x + Math.max(14, Math.floor((normalRect.w - 72) / 2)), normalRect.y + 12);
       ctx.fillText("強くてニューゲーム Enter", strongRect.x + Math.max(12, Math.floor((strongRect.w - 184) / 2)), strongRect.y + 12);
       if (!compact) {
-        ctx.fillStyle = LIGHT_ORANGE;
+        ctx.fillStyle = ORANGE;
         ctx.font = "13px Courier New, monospace";
         ctx.fillText("もう一度、血紋を完成させろ", x + 36, y + panelH - 20);
       }
@@ -4723,7 +4724,7 @@
         `強敵血量: ${game.bloodGoal.bossBlood}`
       ], right, top);
 
-      ctx.fillStyle = LIGHT_ORANGE;
+      ctx.fillStyle = ORANGE;
       ctx.fillText("属性", left, y + panelH - 92);
       const ids = ["fire", "ice", "lightning", "wind", "absorb"];
       for (let i = 0; i < ids.length; i += 1) {
@@ -4737,7 +4738,7 @@
     }
 
     drawResultSection(ctx, title, lines, x, y) {
-      ctx.fillStyle = LIGHT_ORANGE;
+      ctx.fillStyle = ORANGE;
       ctx.font = "15px Courier New, monospace";
       ctx.fillText(title, x, y);
       ctx.fillStyle = ORANGE;
@@ -6387,7 +6388,7 @@
       const y = Math.round(effect.y - (1 - t) * 22);
       ctx.save();
       ctx.globalAlpha = clamp(t * 1.35, 0, 1);
-      ctx.fillStyle = effect.kind === "xp" ? LIGHT_ORANGE : ORANGE;
+      ctx.fillStyle = ORANGE;
       ctx.font = effect.kind === "xp" ? "13px Courier New, monospace" : "15px Courier New, monospace";
       ctx.fillText(effect.text, x - effect.text.length * 4, y);
       if (effect.kind !== "xp") {
@@ -6403,7 +6404,7 @@
       const y = Math.round(effect.y - (1 - t) * (effect.strong ? 42 : 30));
       ctx.save();
       ctx.globalAlpha = clamp(t * 1.35, 0, 1);
-      ctx.fillStyle = effect.strong ? BLOOD_BRIGHT : BLOOD;
+      ctx.fillStyle = effect.strong ? BLOOD_BRIGHT : ORANGE;
       ctx.font = `${effect.strong ? 17 : 15}px Courier New, monospace`;
       ctx.fillText(effect.text, x - effect.text.length * 5, y);
       ctx.fillStyle = BLOOD_DARK;
@@ -6443,7 +6444,7 @@
       const t = clamp(effect.life / effect.maxLife, 0, 1);
       const x = Math.round(effect.x);
       const y = Math.round(effect.y - (1 - t) * 30);
-      ctx.fillStyle = t > 0.55 ? BLOOD_BRIGHT : BLOOD;
+      ctx.fillStyle = BLOOD_BRIGHT;
       ctx.font = "16px Courier New, monospace";
       ctx.fillText(effect.text, x - effect.text.length * 4, y - 8);
       ctx.fillStyle = BLOOD_DARK;
