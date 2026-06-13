@@ -351,12 +351,12 @@
         critical: 0.05,
         bloodComplete: 0.6
       };
-      this.boundUnlock = () => this.unlock(false);
+      this.boundUnlock = () => this.unlock(false, true);
       ["pointerdown", "pointerup", "mousedown", "touchstart", "click", "keydown"].forEach((type) => {
         window.addEventListener(type, this.boundUnlock, { passive: true });
       });
       document.addEventListener("visibilitychange", () => {
-        if (!document.hidden) this.unlock(false);
+        if (!document.hidden) this.unlock(false, false);
       });
     }
 
@@ -464,9 +464,9 @@
       this.pending.elements[kind] = Math.min(5, (this.pending.elements[kind] || 0) + 1);
     }
 
-    unlock(playChime = false) {
+    unlock(playChime = false, allowCreate = true) {
       if (playChime) this.pendingUnlockChime = true;
-      const ctx = this.ensureContext();
+      const ctx = this.ensureContext(allowCreate);
       if (!ctx) return;
       this.primeOutput();
       if (ctx.state === "running") {
@@ -496,9 +496,10 @@
         });
     }
 
-    ensureContext() {
+    ensureContext(allowCreate = false) {
       if (!this.enabled || this.muted) return null;
       if (!this.context) {
+        if (!allowCreate) return null;
         const AudioContextClass = window.AudioContext || window.webkitAudioContext;
         if (!AudioContextClass) {
           this.enabled = false;
@@ -550,10 +551,10 @@
     }
 
     canPlay(name, priority = false) {
-      const ctx = this.ensureContext();
+      const ctx = this.context;
       if (!ctx) return false;
       if (ctx.state !== "running") {
-        this.unlock(false);
+        this.unlock(false, false);
         return false;
       }
       const now = ctx.currentTime;
@@ -575,7 +576,7 @@
     }
 
     playTone(freq, duration, options = {}) {
-      const ctx = this.ensureContext();
+      const ctx = this.ensureContext(false);
       if (!ctx || !this.beginVoice(options.priority)) return;
       const start = ctx.currentTime + (options.delay || 0);
       const osc = ctx.createOscillator();
@@ -597,7 +598,7 @@
     }
 
     playNoise(duration, options = {}) {
-      const ctx = this.ensureContext();
+      const ctx = this.ensureContext(false);
       if (!ctx || !this.beginVoice(options.priority)) return;
       const start = ctx.currentTime + (options.delay || 0);
       const key = Math.round(duration * 1000);
@@ -3940,7 +3941,6 @@
       }
 
       if (!game.gameOver && !game.gameCleared) this.drawStartGuide(ctx, game);
-      if (!game.gameOver && !game.gameCleared) this.drawAudioUnlockPrompt(ctx, game);
       if (!game.gameOver && !game.gameCleared) this.drawKillPulse(ctx, game);
       if (!game.gameOver && !game.gameCleared) this.drawDamagePulse(ctx, game);
       const guideVisible = game.guideTimer > 0 && !game.guideDismissed;
@@ -4142,32 +4142,6 @@
       this.drawFrame(ctx, x, y, w, 34, 1);
       ctx.fillStyle = ORANGE;
       ctx.fillText(text, x + 16, y + 9);
-    }
-
-    drawAudioUnlockPrompt(ctx, game) {
-      if (!game.sfx || game.sfx.unlocked || !game.sfx.enabled || game.sfx.muted) return;
-      const compact = game.width < 560;
-      const text = compact ? "タップで音ON" : "画面をタップ / キー入力で音ON";
-      ctx.font = compact ? "14px Courier New, monospace" : "16px Courier New, monospace";
-      const w = Math.min(game.width - 32, Math.ceil(ctx.measureText(text).width) + 30);
-      const h = compact ? 28 : 32;
-      const x = Math.round((game.width - w) / 2);
-      const y = Math.max(UI_HEIGHT + 10, game.height - h - 18);
-      ctx.fillStyle = BLACK;
-      rect(ctx, x, y, w, h);
-      ctx.fillStyle = LIGHT_ORANGE;
-      this.drawFrame(ctx, x, y, w, h, 1);
-      if (Math.floor(performance.now() / 420) % 2 === 0) {
-        ctx.fillStyle = ORANGE;
-        rect(ctx, x + 9, y + Math.floor(h / 2) - 2, 4, 4);
-        rect(ctx, x + w - 13, y + Math.floor(h / 2) - 2, 4, 4);
-      }
-      ctx.fillStyle = ORANGE;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(text, x + w / 2, y + h / 2 + 1);
-      ctx.textAlign = "left";
-      ctx.textBaseline = "top";
     }
 
     drawKillPulse(ctx, game) {
@@ -4636,7 +4610,7 @@
     }
 
     installAudioUnlockHandlers() {
-      const unlockWithChime = () => this.sfx.unlock(true);
+      const unlockWithChime = () => this.sfx.unlock(true, true);
       ["pointerdown", "touchstart", "mousedown"].forEach((type) => {
         this.canvas.addEventListener(type, unlockWithChime, { capture: true, passive: true });
       });
@@ -4673,7 +4647,7 @@
     processPointerInput() {
       const tap = this.input.consumePointerDown();
       if (tap) {
-        this.sfx.unlock(true);
+        this.sfx.unlock(true, false);
         if (this.handleUiTap(tap.x, tap.y)) return;
         if (!this.gameOver && !this.gameCleared && tap.y >= this.playArea.top) {
           this.targetMovePoint = this.screenToWorld(tap.x, tap.y);
@@ -4682,7 +4656,7 @@
       }
       const pointer = this.input.currentPointerPoint();
       if (pointer && pointer.down && !this.gameOver && !this.gameCleared && pointer.y >= this.playArea.top) {
-        this.sfx.unlock(false);
+        this.sfx.unlock(false, false);
         this.targetMovePoint = this.screenToWorld(pointer.x, pointer.y);
         this.guideDismissed = true;
       }
@@ -4691,7 +4665,7 @@
     unlockAudioFromKeyboard() {
       if (this.sfx.unlocked) return;
       if (this.input.hasMovementKeys() || this.input.pressed("enter") || this.input.pressed(" ") || this.input.pressed("r")) {
-        this.sfx.unlock(true);
+        this.sfx.unlock(true, false);
       }
     }
 
