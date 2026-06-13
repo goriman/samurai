@@ -308,6 +308,12 @@
       this.resumePromise = null;
       this.resumeError = "";
       this.primedOutput = false;
+      this.htmlSoundUrls = null;
+      this.htmlPlayer = null;
+      this.htmlUnlocked = false;
+      this.htmlUnlockAttempted = false;
+      this.htmlUnlockStartedAt = 0;
+      this.prefersHtmlAudio = /iP(ad|hone|od)/.test(navigator.platform || "") || ((navigator.platform || "") === "MacIntel" && navigator.maxTouchPoints > 1);
       this.lastPlayed = new Map();
       this.noiseBuffers = new Map();
       this.pending = {
@@ -464,8 +470,149 @@
       this.pending.elements[kind] = Math.min(5, (this.pending.elements[kind] || 0) + 1);
     }
 
+    makeHtmlTone(freq = 440, duration = 0.08, volume = 0.35, type = "square") {
+      const sampleRate = 16000;
+      const samples = Math.max(1, Math.floor(sampleRate * duration));
+      const bytes = new Uint8Array(44 + samples * 2);
+      const writeString = (offset, value) => {
+        for (let i = 0; i < value.length; i += 1) bytes[offset + i] = value.charCodeAt(i);
+      };
+      const write16 = (offset, value) => {
+        bytes[offset] = value & 255;
+        bytes[offset + 1] = (value >> 8) & 255;
+      };
+      const write32 = (offset, value) => {
+        bytes[offset] = value & 255;
+        bytes[offset + 1] = (value >> 8) & 255;
+        bytes[offset + 2] = (value >> 16) & 255;
+        bytes[offset + 3] = (value >> 24) & 255;
+      };
+      writeString(0, "RIFF");
+      write32(4, 36 + samples * 2);
+      writeString(8, "WAVE");
+      writeString(12, "fmt ");
+      write32(16, 16);
+      write16(20, 1);
+      write16(22, 1);
+      write32(24, sampleRate);
+      write32(28, sampleRate * 2);
+      write16(32, 2);
+      write16(34, 16);
+      writeString(36, "data");
+      write32(40, samples * 2);
+      for (let i = 0; i < samples; i += 1) {
+        const t = i / sampleRate;
+        const phase = (t * freq) % 1;
+        const env = Math.min(1, i / Math.max(1, sampleRate * 0.006)) * Math.pow(1 - i / samples, 1.7);
+        let wave = type === "triangle"
+          ? 1 - Math.abs(phase * 4 - 2)
+          : type === "noise"
+            ? Math.random() * 2 - 1
+            : phase < 0.5 ? 1 : -1;
+        if (type === "triangle") wave = wave * 2 - 1;
+        const value = Math.max(-1, Math.min(1, wave * volume * env));
+        const pcm = Math.round(value * 32767);
+        write16(44 + i * 2, pcm < 0 ? 65536 + pcm : pcm);
+      }
+      let binary = "";
+      const chunk = 8192;
+      for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+      }
+      return `data:audio/wav;base64,${btoa(binary)}`;
+    }
+
+    buildHtmlSounds() {
+      if (this.htmlSoundUrls && this.htmlPlayer) return;
+      const specs = {
+        unlock: [880, 0.11, 0.32, "triangle"],
+        swing: [760, 0.055, 0.26, "noise"],
+        hit: [180, 0.06, 0.38, "square"],
+        kill: [110, 0.13, 0.46, "noise"],
+        critical: [1240, 0.09, 0.4, "triangle"],
+        xp: [980, 0.055, 0.24, "triangle"],
+        dismember: [150, 0.09, 0.45, "square"],
+        wall: [82, 0.12, 0.5, "square"],
+        absorb: [620, 0.08, 0.28, "triangle"],
+        bloodSpray: [260, 0.08, 0.36, "noise"],
+        bloodImpact: [220, 0.11, 0.36, "square"],
+        element: [1500, 0.06, 0.28, "triangle"],
+        levelUp: [1040, 0.16, 0.36, "triangle"],
+        bloodComplete: [96, 0.32, 0.48, "square"],
+        hurt: [96, 0.12, 0.4, "square"],
+        item: [920, 0.11, 0.3, "triangle"],
+        boss: [72, 0.2, 0.44, "square"]
+      };
+      this.htmlSoundUrls = new Map();
+      for (const [name, spec] of Object.entries(specs)) {
+        this.htmlSoundUrls.set(name, this.makeHtmlTone(...spec));
+      }
+      this.htmlPlayer = new Audio();
+      this.htmlPlayer.preload = "auto";
+      this.htmlPlayer.volume = Math.min(1, this.masterVolume * 2.2);
+    }
+
+    unlockHtmlAudio(playChime = false) {
+      if (!this.prefersHtmlAudio || this.htmlUnlocked || this.muted || !this.enabled) return;
+      this.htmlUnlockAttempted = true;
+      this.htmlUnlockStartedAt = performance.now();
+      this.buildHtmlSounds();
+      const audio = this.htmlPlayer;
+      if (!audio) return;
+      try {
+        audio.src = this.htmlSoundUrls.get("unlock");
+        audio.load();
+        audio.currentTime = 0;
+        const result = audio.play();
+        if (playChime) this.unlockChimed = true;
+        if (result && typeof result.then === "function") {
+          result
+            .then(() => {
+              this.htmlUnlocked = true;
+              this.resumeError = "";
+            })
+            .catch((error) => {
+              this.resumeError = error && error.message ? error.message : "html audio blocked";
+            });
+        } else {
+          this.htmlUnlocked = true;
+        }
+      } catch (error) {
+        this.resumeError = error && error.message ? error.message : "html audio failed";
+      }
+    }
+
+    audioReady() {
+      return this.unlocked || this.htmlUnlocked;
+    }
+
+    shouldUseHtmlSfx() {
+      return this.prefersHtmlAudio && this.htmlUnlocked;
+    }
+
+    playHtmlCue(name) {
+      if (!this.shouldUseHtmlSfx() || !this.htmlSoundUrls || !this.htmlPlayer) return false;
+      const url = this.htmlSoundUrls.get(name) || this.htmlSoundUrls.get("hit");
+      const audio = this.htmlPlayer;
+      if (!audio) return false;
+      try {
+        audio.pause();
+        if (audio.src !== url) {
+          audio.src = url;
+          audio.load();
+        }
+        audio.currentTime = 0;
+        const result = audio.play();
+        if (result && typeof result.catch === "function") result.catch(() => {});
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+
     unlock(playChime = false, allowCreate = true) {
       if (playChime) this.pendingUnlockChime = true;
+      if (allowCreate) this.unlockHtmlAudio(playChime);
       const ctx = this.ensureContext(allowCreate);
       if (!ctx) return;
       this.primeOutput();
@@ -545,6 +692,7 @@
     playUnlockChime() {
       if (this.unlockChimed || !this.context) return;
       this.unlockChimed = true;
+      if (this.playHtmlCue("unlock")) return;
       this.playTone(660, 0.055, { type: "triangle", volume: 0.045, priority: true });
       this.playTone(990, 0.07, { type: "square", volume: 0.035, delay: 0.04, priority: true });
     }
@@ -556,12 +704,14 @@
 
     canPlay(name, priority = false) {
       const ctx = this.context;
-      if (!ctx) return false;
-      if (ctx.state !== "running") {
-        this.unlock(false, false);
-        return false;
+      if (!ctx && !this.shouldUseHtmlSfx()) return false;
+      if (ctx && ctx.state !== "running") {
+        if (!this.shouldUseHtmlSfx()) {
+          this.unlock(false, false);
+          return false;
+        }
       }
-      const now = ctx.currentTime;
+      const now = ctx && ctx.state === "running" ? ctx.currentTime : performance.now() / 1000;
       const last = this.lastPlayed.get(name) || -999;
       if (now - last < (this.cooldowns[name] || 0)) return false;
       if (!priority && this.activeVoices >= this.maxVoices) return false;
@@ -635,6 +785,7 @@
 
     swing() {
       if (!this.canPlay("swing")) return;
+      if (this.playHtmlCue("swing")) return;
       const jitter = 0.94 + Math.random() * 0.13;
       this.playNoise(0.065, { volume: 0.042, frequency: 2300 * jitter, q: 0.72 });
       this.playTone(980 * jitter, 0.055, { type: "sawtooth", volume: 0.024, endFreq: 360 * jitter });
@@ -643,6 +794,7 @@
 
     playHitBatch(count) {
       if (!this.canPlay("hit")) return;
+      if (this.playHtmlCue("hit")) return;
       const strength = Math.min(1.45, 1 + (count - 1) * 0.08);
       this.playTone(92, 0.026, { type: "square", volume: 0.06 * strength, endFreq: 58 });
       this.playNoise(0.052, { volume: 0.082 * strength, frequency: 1180 + count * 60, q: 2.4 });
@@ -655,6 +807,7 @@
       const playable = this.canPlay("kill", true);
       this.cooldowns.kill = originalCooldown;
       if (!playable) return;
+      if (this.playHtmlCue("kill")) return;
       const pitch = 1 + Math.min(0.5, (combo - 1) * 0.055 + (count - 1) * 0.035);
       const force = Math.min(1.62, 1 + count * 0.08 + (heavy ? 0.18 : 0) + (critical ? 0.22 : 0));
       this.playTone(58 * pitch, 0.075, { type: "square", volume: 0.1 * force, endFreq: 36 * pitch, priority: true });
@@ -666,6 +819,7 @@
 
     playCriticalBatch(count) {
       if (!this.canPlay("critical", true)) return;
+      if (this.playHtmlCue("critical")) return;
       const force = Math.min(1.35, 1 + count * 0.08);
       this.playTone(72, 0.055, { type: "square", volume: 0.08 * force, endFreq: 42, priority: true });
       this.playNoise(0.052, { volume: 0.07 * force, frequency: 1800, q: 2.8, priority: true });
@@ -674,6 +828,7 @@
 
     playXpBatch(count) {
       if (!this.canPlay("xp")) return;
+      if (this.playHtmlCue("xp")) return;
       const ctx = this.context;
       const now = ctx ? ctx.currentTime : 0;
       this.xpCombo = now - this.lastXpAt < 0.25 ? Math.min(9, this.xpCombo + count) : 0;
@@ -685,6 +840,7 @@
 
     playDismemberBatch(count, power = 1, metallic = false, boss = false) {
       if (!this.canPlay("dismember", true)) return;
+      if (this.playHtmlCue("dismember")) return;
       const strength = Math.min(2.15, 0.88 + count * 0.11 + power * 0.26 + (boss ? 0.3 : 0));
       this.playTone(boss ? 64 : 92, 0.07, { type: "square", volume: 0.078 * strength, endFreq: boss ? 42 : 54, priority: true });
       this.playNoise(0.062, { volume: 0.092 * strength, frequency: metallic ? 1900 : 1280, q: metallic ? 3.1 : 2.0, priority: true });
@@ -697,6 +853,7 @@
 
     playWallBatch(count, power) {
       if (!this.canPlay("wall", true)) return;
+      if (this.playHtmlCue("wall")) return;
       const strength = Math.min(1.55, 0.9 + count * 0.12 + power * 0.28);
       this.playTone(48, 0.105, { type: "square", volume: 0.115 * strength, endFreq: 34, priority: true });
       this.playNoise(0.09, { volume: 0.095 * strength, frequency: 310 + power * 90, q: 1.0, priority: true });
@@ -705,6 +862,7 @@
 
     playAbsorbBatch(count, level) {
       if (!this.canPlay("absorb")) return;
+      if (this.playHtmlCue("absorb")) return;
       const pitch = 1 + Math.min(0.55, count * 0.045 + level * 0.012);
       this.playNoise(0.055, { volume: 0.035, frequency: 1700 * pitch, q: 0.65 });
       this.playTone(620 * pitch, 0.052, { type: "triangle", volume: 0.042, endFreq: 980 * pitch });
@@ -713,6 +871,7 @@
 
     playBloodSprayBatch(count) {
       if (!this.canPlay("bloodSpray")) return;
+      if (this.playHtmlCue("bloodSpray")) return;
       const force = Math.min(1.8, 0.9 + count * 0.12);
       this.playNoise(0.075, { volume: 0.085 * force, frequency: 420, q: 0.8 });
       this.playNoise(0.038, { volume: 0.055 * force, frequency: 1450, q: 1.4, delay: 0.012 });
@@ -720,6 +879,7 @@
 
     playBloodImpactBatch(count, level) {
       if (!this.canPlay("bloodImpact")) return;
+      if (this.playHtmlCue("bloodImpact")) return;
       const pitch = 1 + Math.min(0.72, count * 0.045 + level * 0.018);
       const force = Math.min(1.7, 0.85 + count * 0.08 + level * 0.025);
       this.playTone(210 * pitch, 0.09, { type: "sawtooth", volume: 0.07 * force, endFreq: 420 * pitch });
@@ -730,6 +890,7 @@
 
     playElementBatch(kind, count) {
       if (!this.canPlay("element")) return;
+      if (this.playHtmlCue("element")) return;
       const boost = Math.min(1.25, 1 + count * 0.06);
       if (kind === "fire") {
         this.playNoise(0.05, { volume: 0.04 * boost, frequency: 620, q: 0.8 });
@@ -748,6 +909,7 @@
 
     levelUp() {
       if (!this.canPlay("levelUp", true)) return;
+      if (this.playHtmlCue("levelUp")) return;
       this.playTone(130, 0.11, { type: "square", volume: 0.09, endFreq: 196, priority: true });
       [392, 523, 659, 784, 1046, 1318].forEach((freq, index) => {
         this.playTone(freq, 0.105, { type: index < 2 ? "square" : "triangle", volume: 0.072, delay: 0.035 + index * 0.034, priority: true });
@@ -758,6 +920,7 @@
 
     bloodComplete() {
       if (!this.canPlay("bloodComplete", true)) return;
+      if (this.playHtmlCue("bloodComplete")) return;
       this.playTone(48, 0.32, { type: "sawtooth", volume: 0.13, endFreq: 36, priority: true });
       this.playNoise(0.18, { volume: 0.1, frequency: 360, q: 0.7, priority: true });
       this.playTone(96, 0.14, { type: "square", volume: 0.11, delay: 0.12, endFreq: 72, priority: true });
@@ -771,18 +934,21 @@
 
     hurt() {
       if (!this.canPlay("hurt", true)) return;
+      if (this.playHtmlCue("hurt")) return;
       this.playTone(120, 0.11, { type: "square", volume: 0.08, endFreq: 70, priority: true });
       this.playNoise(0.075, { volume: 0.05, frequency: 220, q: 0.9, priority: true });
     }
 
     item() {
       if (!this.canPlay("item", true)) return;
+      if (this.playHtmlCue("item")) return;
       this.playTone(720, 0.065, { type: "triangle", volume: 0.055, priority: true });
       this.playTone(1080, 0.09, { type: "square", volume: 0.045, delay: 0.045, priority: true });
     }
 
     boss() {
       if (!this.canPlay("boss", true)) return;
+      if (this.playHtmlCue("boss")) return;
       this.playTone(92, 0.16, { type: "sawtooth", volume: 0.075, endFreq: 58, priority: true });
       this.playTone(138, 0.12, { type: "square", volume: 0.045, delay: 0.08, endFreq: 104, priority: true });
     }
@@ -4621,6 +4787,9 @@
       ["pointerdown", "touchstart", "mousedown"].forEach((type) => {
         this.canvas.addEventListener(type, unlockWithChime, { capture: true, passive: true });
       });
+      ["touchend", "click"].forEach((type) => {
+        this.canvas.addEventListener(type, unlockWithChime, { capture: true, passive: true });
+      });
       window.addEventListener("keydown", unlockWithChime, { capture: true, passive: true });
     }
 
@@ -4677,14 +4846,14 @@
     unlockAudioFromKeyboard() {
       if (this.input.hasMovementKeys() || this.input.pressed("enter") || this.input.pressed(" ") || this.input.pressed("r")) {
         if (!this.gameStarted && !this.gameOver && !this.gameCleared) this.startRequested = true;
-        if (this.sfx.unlocked) return;
+        if (this.sfx.audioReady()) return;
         this.sfx.unlock(true, false);
       }
     }
 
     tryStartAfterAudioUnlock() {
       if (this.gameStarted || this.gameOver || this.gameCleared || !this.startRequested) return;
-      if (!this.sfx.unlocked) return;
+      if (!this.sfx.audioReady()) return;
       this.gameStarted = true;
       this.startRequested = false;
       this.guideDismissed = true;
@@ -4782,7 +4951,7 @@
       this.notice = "移動: WASD / 矢印";
       this.noticeTimer = 3;
       this.guideMaxTimer = 6;
-      this.gameStarted = !!(this.sfx && this.sfx.unlocked);
+      this.gameStarted = !!(this.sfx && this.sfx.audioReady());
       this.guideTimer = this.gameStarted ? 0 : this.guideMaxTimer;
       this.guideDismissed = this.gameStarted;
       this.startRequested = false;
