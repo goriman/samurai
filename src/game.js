@@ -91,6 +91,8 @@
     maxBursts: 44,
     maxLegacyEffects: 150
   };
+  const SFX_MASTER_VOLUME = 0.32;
+  const SFX_MAX_VOICES = 22;
   const CRITICAL_DEFAULTS = {
     chance: 0.08,
     multiplier: 1.75,
@@ -298,7 +300,13 @@
       this.enabled = true;
       this.muted = false;
       this.activeVoices = 0;
-      this.maxVoices = 12;
+      this.maxVoices = SFX_MAX_VOICES;
+      this.masterVolume = SFX_MASTER_VOLUME;
+      this.unlocked = false;
+      this.unlockChimed = false;
+      this.pendingUnlockChime = false;
+      this.resumePromise = null;
+      this.resumeError = "";
       this.lastPlayed = new Map();
       this.noiseBuffers = new Map();
       this.pending = {
@@ -310,6 +318,9 @@
         critical: 0,
         xp: 0,
         dismember: 0,
+        dismemberPower: 0,
+        dismemberMetal: false,
+        dismemberBoss: false,
         wall: 0,
         wallPower: 0,
         absorb: 0,
@@ -339,8 +350,13 @@
         critical: 0.05,
         bloodComplete: 0.6
       };
-      window.addEventListener("keydown", () => this.unlock(), { once: true });
-      window.addEventListener("pointerdown", () => this.unlock(), { once: true });
+      this.boundUnlock = () => this.unlock(false);
+      ["pointerdown", "pointerup", "mousedown", "touchstart", "click", "keydown"].forEach((type) => {
+        window.addEventListener(type, this.boundUnlock, { passive: true });
+      });
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) this.unlock(false);
+      });
     }
 
     update() {
@@ -364,8 +380,11 @@
         this.pending.xp = 0;
       }
       if (this.pending.dismember > 0) {
-        this.playDismemberBatch(this.pending.dismember);
+        this.playDismemberBatch(this.pending.dismember, this.pending.dismemberPower, this.pending.dismemberMetal, this.pending.dismemberBoss);
         this.pending.dismember = 0;
+        this.pending.dismemberPower = 0;
+        this.pending.dismemberMetal = false;
+        this.pending.dismemberBoss = false;
       }
       if (this.pending.wall > 0) {
         this.playWallBatch(this.pending.wall, this.pending.wallPower);
@@ -411,8 +430,14 @@
       this.pending.xp = Math.min(10, this.pending.xp + 1);
     }
 
-    queueDismember() {
+    queueDismember(part = "", boss = false) {
+      const metallic = part && (part.startsWith("weapon") || part === "horn");
+      const heavyPart = part === "head" || part === "body" || metallic;
+      const power = (boss ? 1.75 : 1) + (metallic ? 0.45 : 0) + (heavyPart ? 0.28 : 0);
       this.pending.dismember = Math.min(5, this.pending.dismember + 1);
+      this.pending.dismemberPower = Math.max(this.pending.dismemberPower, power);
+      this.pending.dismemberMetal = this.pending.dismemberMetal || metallic;
+      this.pending.dismemberBoss = this.pending.dismemberBoss || boss;
     }
 
     queueWall(power = 1) {
@@ -438,9 +463,34 @@
       this.pending.elements[kind] = Math.min(5, (this.pending.elements[kind] || 0) + 1);
     }
 
-    unlock() {
+    unlock(playChime = false) {
+      if (playChime) this.pendingUnlockChime = true;
       const ctx = this.ensureContext();
-      if (ctx && ctx.state === "suspended") ctx.resume();
+      if (!ctx) return;
+      if (ctx.state === "running") {
+        this.unlocked = true;
+        if (this.pendingUnlockChime) {
+          this.pendingUnlockChime = false;
+          this.playUnlockChime();
+        }
+        return;
+      }
+      if (ctx.state !== "suspended" || this.resumePromise) return;
+      this.resumePromise = ctx.resume()
+        .then(() => {
+          this.unlocked = ctx.state === "running";
+          this.resumeError = "";
+          if (this.unlocked && this.pendingUnlockChime) {
+            this.pendingUnlockChime = false;
+            this.playUnlockChime();
+          }
+        })
+        .catch((error) => {
+          this.resumeError = error && error.message ? error.message : "resume failed";
+        })
+        .finally(() => {
+          this.resumePromise = null;
+        });
     }
 
     ensureContext() {
@@ -459,17 +509,32 @@
         this.compressor.ratio.value = 4;
         this.compressor.attack.value = 0.006;
         this.compressor.release.value = 0.18;
-        this.masterGain.gain.value = 0.18;
+        this.masterGain.gain.value = this.muted ? 0 : this.masterVolume;
         this.masterGain.connect(this.compressor);
         this.compressor.connect(this.context.destination);
       }
-      if (this.context.state === "suspended") this.context.resume();
       return this.context;
+    }
+
+    playUnlockChime() {
+      if (this.unlockChimed || !this.context || this.context.state !== "running") return;
+      this.unlockChimed = true;
+      this.playTone(660, 0.055, { type: "triangle", volume: 0.045, priority: true });
+      this.playTone(990, 0.07, { type: "square", volume: 0.035, delay: 0.04, priority: true });
+    }
+
+    debugState() {
+      const state = this.context ? this.context.state : "none";
+      return `音声:${state}${this.resumeError ? "!" : ""}`;
     }
 
     canPlay(name, priority = false) {
       const ctx = this.ensureContext();
       if (!ctx) return false;
+      if (ctx.state !== "running") {
+        this.unlock(false);
+        return false;
+      }
       const now = ctx.currentTime;
       const last = this.lastPlayed.get(name) || -999;
       if (now - last < (this.cooldowns[name] || 0)) return false;
@@ -592,12 +657,16 @@
       if (count >= 4) this.playTone(base * 1.5, 0.035, { type: "triangle", volume: 0.025, delay: 0.025, endFreq: base * 1.8 });
     }
 
-    playDismemberBatch(count) {
+    playDismemberBatch(count, power = 1, metallic = false, boss = false) {
       if (!this.canPlay("dismember", true)) return;
-      const strength = Math.min(1.35, 1 + count * 0.08);
-      this.playNoise(0.055, { volume: 0.075 * strength, frequency: 1450, q: 2.4, priority: true });
-      this.playTone(230, 0.045, { type: "square", volume: 0.058 * strength, endFreq: 120, priority: true });
-      this.playTone(1320, 0.042, { type: "triangle", volume: 0.044 * strength, delay: 0.012, endFreq: 780, priority: true });
+      const strength = Math.min(2.15, 0.88 + count * 0.11 + power * 0.26 + (boss ? 0.3 : 0));
+      this.playTone(boss ? 64 : 92, 0.07, { type: "square", volume: 0.078 * strength, endFreq: boss ? 42 : 54, priority: true });
+      this.playNoise(0.062, { volume: 0.092 * strength, frequency: metallic ? 1900 : 1280, q: metallic ? 3.1 : 2.0, priority: true });
+      this.playTone(metallic ? 1560 : 320, 0.052, { type: metallic ? "triangle" : "sawtooth", volume: 0.056 * strength, delay: 0.01, endFreq: metallic ? 840 : 150, priority: true });
+      this.playTone(1320 + count * 55, 0.042, { type: "triangle", volume: 0.044 * strength, delay: 0.028, endFreq: metallic ? 2160 : 780, priority: true });
+      if (boss || count >= 3) {
+        this.playNoise(0.095, { volume: 0.054 * strength, frequency: 420, q: 0.75, delay: 0.03, priority: true });
+      }
     }
 
     playWallBatch(count, power) {
@@ -694,7 +763,7 @@
 
     setMuted(muted) {
       this.muted = muted;
-      if (this.masterGain) this.masterGain.gain.value = muted ? 0 : 0.18;
+      if (this.masterGain) this.masterGain.gain.value = muted ? 0 : this.masterVolume;
     }
   }
 
@@ -2102,6 +2171,96 @@
     }
   }
 
+  function drawDropFrame(ctx, x, y, size = 12, accent = false) {
+    ctx.fillStyle = LIGHT_ORANGE;
+    rect(ctx, x - size, y - size, size * 2, 2);
+    rect(ctx, x - size, y + size - 2, size * 2, 2);
+    rect(ctx, x - size, y - size, 2, size * 2);
+    rect(ctx, x + size - 2, y - size, 2, size * 2);
+    if (!accent) return;
+    rect(ctx, x - size - 4, y - 1, 4, 2);
+    rect(ctx, x + size, y - 1, 4, 2);
+    rect(ctx, x - 1, y - size - 4, 2, 4);
+    rect(ctx, x - 1, y + size, 2, 4);
+  }
+
+  function drawExperienceOrbGlyph(ctx, x, y, pulse = false) {
+    ctx.fillStyle = LIGHT_ORANGE;
+    rect(ctx, x - 1, y - 5, 2, 2);
+    rect(ctx, x - 5, y - 1, 2, 2);
+    rect(ctx, x + 3, y - 1, 2, 2);
+    rect(ctx, x - 1, y + 3, 2, 2);
+    ctx.fillStyle = ORANGE;
+    rect(ctx, x - 2, y - 2, 4, 4);
+    if (pulse) {
+      rect(ctx, x - 6, y - 6, 2, 2);
+      rect(ctx, x + 4, y + 4, 2, 2);
+    }
+  }
+
+  function drawHealDropGlyph(ctx, x, y) {
+    drawDropFrame(ctx, x, y, 10, false);
+    ctx.fillStyle = ORANGE;
+    rect(ctx, x - 2, y - 8, 4, 16);
+    rect(ctx, x - 8, y - 2, 16, 4);
+    ctx.fillStyle = LIGHT_ORANGE;
+    rect(ctx, x - 12, y - 1, 3, 2);
+    rect(ctx, x + 9, y - 1, 3, 2);
+  }
+
+  function drawSpeedDropGlyph(ctx, x, y) {
+    drawDropFrame(ctx, x, y, 10, false);
+    ctx.fillStyle = ORANGE;
+    rect(ctx, x - 7, y - 6, 12, 3);
+    rect(ctx, x - 3, y - 3, 5, 11);
+    rect(ctx, x + 2, y + 4, 8, 3);
+    ctx.fillStyle = LIGHT_ORANGE;
+    rect(ctx, x - 12, y - 7, 4, 2);
+    rect(ctx, x - 14, y - 2, 5, 2);
+    rect(ctx, x - 11, y + 4, 4, 2);
+  }
+
+  function drawCollectAllExpDropGlyph(ctx, x, y, pulse = false) {
+    drawDropFrame(ctx, x, y, 14, true);
+    ctx.fillStyle = ORANGE;
+    rect(ctx, x - 2, y - 2, 4, 4);
+    linePixels(ctx, x - 13, y - 7, x - 5, y - 2);
+    linePixels(ctx, x + 13, y - 7, x + 5, y - 2);
+    linePixels(ctx, x - 13, y + 7, x - 5, y + 2);
+    linePixels(ctx, x + 13, y + 7, x + 5, y + 2);
+    ctx.fillStyle = LIGHT_ORANGE;
+    rect(ctx, x - 17, y - 9, 3, 3);
+    rect(ctx, x + 14, y - 9, 3, 3);
+    rect(ctx, x - 17, y + 6, 3, 3);
+    rect(ctx, x + 14, y + 6, 3, 3);
+    if (pulse) {
+      ctx.fillStyle = ORANGE;
+      rect(ctx, x - 1, y - 18, 2, 4);
+      rect(ctx, x - 1, y + 14, 2, 4);
+    }
+  }
+
+  function drawDamageAllEnemiesDropGlyph(ctx, x, y, pulse = false) {
+    drawDropFrame(ctx, x, y, 14, true);
+    ctx.fillStyle = ORANGE;
+    rect(ctx, x - 7, y - 10, 14, 18);
+    rect(ctx, x - 4, y - 13, 8, 4);
+    ctx.fillStyle = BLACK;
+    rect(ctx, x - 3, y - 5, 6, 2);
+    rect(ctx, x - 1, y - 7, 2, 6);
+    ctx.fillStyle = ORANGE;
+    thickLinePixels(ctx, x - 13, y + 10, x + 14, y - 10, 2);
+    ctx.fillStyle = LIGHT_ORANGE;
+    rect(ctx, x - 18, y - 1, 4, 2);
+    rect(ctx, x + 14, y - 1, 4, 2);
+    rect(ctx, x - 1, y + 14, 2, 4);
+    if (pulse) {
+      ctx.fillStyle = ORANGE;
+      rect(ctx, x - 18, y - 14, 4, 2);
+      rect(ctx, x + 14, y + 12, 4, 2);
+    }
+  }
+
   class Input {
     constructor(canvas) {
       this.canvas = canvas;
@@ -3155,7 +3314,7 @@
       const part = alive[Math.floor(Math.random() * alive.length)];
       this.parts[part] = false;
       this.flash = 0.22;
-      game.sfx.queueDismember();
+      game.sfx.queueDismember(part, boss);
       game.effectManager.dismember(this.x, this.y, dir, part);
       if (boss) {
         const scale = this.type === "levelBoss" ? 1.35 + this.rank * 0.08 : 1.05;
@@ -3189,6 +3348,15 @@
             text: "制御不能"
           });
         }
+      } else {
+        game.effects.push({
+          type: "partBreakPop",
+          x: this.x,
+          y: this.y - this.radius - 14,
+          life: 0.46,
+          maxLife: 0.46,
+          text: part && part.startsWith("weapon") ? "武器破壊" : "破壊"
+        });
       }
       return part;
     }
@@ -3196,7 +3364,10 @@
     scatterRemainingParts(game, dir, force) {
       for (const part of Object.keys(this.parts)) {
         if (!this.parts[part]) continue;
-        if (force || Math.random() < 0.28) game.effectManager.dismember(this.x, this.y, dir, part);
+        if (force || Math.random() < 0.28) {
+          game.effectManager.dismember(this.x, this.y, dir, part);
+          game.sfx.queueDismember(part, isBossType(this.type));
+        }
         this.parts[part] = false;
       }
     }
@@ -3636,8 +3807,10 @@
     }
 
     draw(ctx) {
-      ctx.fillStyle = ORANGE;
-      rect(ctx, Math.round(this.x) - 2, Math.round(this.y) - 2, 4, 4);
+      const x = Math.round(this.x);
+      const y = Math.round(this.y);
+      const pulse = Math.floor(performance.now() / 360) % 2 === 0;
+      drawExperienceOrbGlyph(ctx, x, y, pulse);
     }
   }
 
@@ -3694,6 +3867,7 @@
     draw(ctx) {
       const x = Math.round(this.x);
       const y = Math.round(this.y);
+      const pulse = Math.floor(performance.now() / 300) % 2 === 0;
       if (ELEMENT_ITEMS.includes(this.kind)) {
         ctx.fillStyle = attributeColor(this.kind, "main");
         rect(ctx, x - 12, y - 12, 24, 2);
@@ -3709,39 +3883,14 @@
         drawAttributeGlyph(ctx, this.kind, x, y, 1.05, 1);
         return;
       }
-      ctx.fillStyle = ORANGE;
-      if (CONSUMABLE_ITEMS.includes(this.kind)) {
-        rect(ctx, x - 11, y - 11, 22, 2);
-        rect(ctx, x - 11, y + 9, 22, 2);
-        rect(ctx, x - 11, y - 11, 2, 22);
-        rect(ctx, x + 9, y - 11, 2, 22);
-        rect(ctx, x - 15, y, 5, 2);
-        rect(ctx, x + 10, y, 5, 2);
-        rect(ctx, x, y - 15, 2, 5);
-        rect(ctx, x, y + 10, 2, 5);
-        rect(ctx, x - 2, y - 2, 5, 5);
-      }
       if (this.kind === "heal") {
-        rect(ctx, x - 1, y - 5, 2, 10);
-        rect(ctx, x - 5, y - 1, 10, 2);
+        drawHealDropGlyph(ctx, x, y);
       } else if (this.kind === "speed") {
-        rect(ctx, x - 5, y - 5, 10, 2);
-        rect(ctx, x - 1, y - 5, 3, 10);
-        rect(ctx, x + 4, y, 3, 3);
+        drawSpeedDropGlyph(ctx, x, y);
       } else if (this.kind === "collectAllExp") {
-        ctx.fillStyle = ORANGE;
-        dashedLinePixels(ctx, x - 12, y, x + 12, y, 3, 5);
-        dashedLinePixels(ctx, x, y - 12, x, y + 12, 3, 5);
-        rect(ctx, x - 3, y - 3, 6, 6);
-        rect(ctx, x + 9, y - 7, 4, 4);
-        rect(ctx, x - 13, y + 5, 4, 4);
+        drawCollectAllExpDropGlyph(ctx, x, y, pulse);
       } else if (this.kind === "damageAllEnemies") {
-        ctx.fillStyle = ORANGE;
-        rect(ctx, x - 6, y - 8, 12, 14);
-        rect(ctx, x - 2, y - 13, 4, 5);
-        linePixels(ctx, x - 16, y, x - 8, y);
-        linePixels(ctx, x + 8, y, x + 16, y);
-        linePixels(ctx, x, y + 8, x, y + 16);
+        drawDamageAllEnemiesDropGlyph(ctx, x, y, pulse);
       }
     }
   }
@@ -3781,6 +3930,11 @@
       if (game.gameCleared) {
         if (game.showClearResult) this.drawClearScreen(ctx, game);
         else this.drawClearAppreciation(ctx, game);
+      }
+      if (DEBUG_ATTACK_AREA) {
+        ctx.fillStyle = LIGHT_ORANGE;
+        ctx.font = "12px Courier New, monospace";
+        ctx.fillText(game.sfx.debugState(), 12, UI_HEIGHT + 8);
       }
     }
 
@@ -4138,20 +4292,34 @@
       const lineTop = compact ? 100 : 108;
       const lineGap = compact ? 19 : 22;
       for (let i = 0; i < lines.length; i += 1) ctx.fillText(lines[i], x + 38, y + lineTop + i * lineGap);
-      const retryW = Math.min(220, panelW - 64);
-      const retryX = Math.round(x + (panelW - retryW) / 2);
-      const retryY = Math.min(y + panelH - 58, game.height - safeBottom - 48);
+      const retryY = Math.min(y + panelH - (compact ? 100 : 58), game.height - safeBottom - (compact ? 92 : 48));
+      const buttonGap = compact ? 10 : 16;
+      const buttonH = compact ? 38 : 40;
+      const normalW = compact ? Math.min(250, panelW - 64) : Math.min(178, Math.floor((panelW - 92) / 2));
+      const strongW = compact ? Math.min(250, panelW - 64) : Math.min(260, Math.floor((panelW - 92) / 2));
+      const totalW = compact ? Math.max(normalW, strongW) : normalW + strongW + buttonGap;
+      const startX = Math.round(x + (panelW - totalW) / 2);
+      const normalRect = { x: compact ? Math.round(x + (panelW - normalW) / 2) : startX, y: retryY, w: normalW, h: buttonH };
+      const strongRect = {
+        x: compact ? Math.round(x + (panelW - strongW) / 2) : startX + normalW + buttonGap,
+        y: compact ? retryY + buttonH + buttonGap : retryY,
+        w: strongW,
+        h: buttonH
+      };
       ctx.fillStyle = LIGHT_ORANGE;
-      this.drawFrame(ctx, retryX, retryY, retryW, 40, 1);
+      this.drawFrame(ctx, normalRect.x, normalRect.y, normalRect.w, normalRect.h, 1);
+      this.drawFrame(ctx, strongRect.x, strongRect.y, strongRect.w, strongRect.h, 1);
       ctx.fillStyle = ORANGE;
-      ctx.font = game.width < 520 ? "14px Courier New, monospace" : "16px Courier New, monospace";
-      ctx.fillText("再挑戦  R / タップ", retryX + Math.max(16, Math.floor((retryW - 144) / 2)), retryY + 12);
+      ctx.font = game.width < 520 ? "13px Courier New, monospace" : "15px Courier New, monospace";
+      ctx.fillText("再挑戦 R", normalRect.x + Math.max(14, Math.floor((normalRect.w - 72) / 2)), normalRect.y + 12);
+      ctx.fillText("強くてニューゲーム Enter", strongRect.x + Math.max(12, Math.floor((strongRect.w - 184) / 2)), strongRect.y + 12);
       if (!compact) {
         ctx.fillStyle = LIGHT_ORANGE;
         ctx.font = "13px Courier New, monospace";
         ctx.fillText("もう一度、血紋を完成させろ", x + 36, y + panelH - 20);
       }
-      game.uiHitZones.push({ type: "retry", x: retryX - 8, y: retryY - 8, w: retryW + 16, h: 54 });
+      game.uiHitZones.push({ type: "retry", x: normalRect.x - 8, y: normalRect.y - 8, w: normalRect.w + 16, h: normalRect.h + 16 });
+      game.uiHitZones.push({ type: "strongRetry", x: strongRect.x - 8, y: strongRect.y - 8, w: strongRect.w + 16, h: strongRect.h + 16 });
     }
 
     drawClearScreen(ctx, game) {
@@ -4448,6 +4616,7 @@
     processPointerInput() {
       const tap = this.input.consumePointerDown();
       if (tap) {
+        this.sfx.unlock(true);
         if (this.handleUiTap(tap.x, tap.y)) return;
         if (!this.gameOver && !this.gameCleared && tap.y >= this.playArea.top) {
           this.targetMovePoint = this.screenToWorld(tap.x, tap.y);
@@ -4456,8 +4625,16 @@
       }
       const pointer = this.input.currentPointerPoint();
       if (pointer && pointer.down && !this.gameOver && !this.gameCleared && pointer.y >= this.playArea.top) {
+        this.sfx.unlock(false);
         this.targetMovePoint = this.screenToWorld(pointer.x, pointer.y);
         this.guideDismissed = true;
+      }
+    }
+
+    unlockAudioFromKeyboard() {
+      if (this.sfx.unlocked) return;
+      if (this.input.hasMovementKeys() || this.input.pressed("enter") || this.input.pressed(" ") || this.input.pressed("r")) {
+        this.sfx.unlock(true);
       }
     }
 
@@ -4475,6 +4652,10 @@
         }
         if (zone.type === "retry") {
           this.reset();
+          return true;
+        }
+        if (zone.type === "strongRetry") {
+          this.startStrongNewGame();
           return true;
         }
       }
@@ -4580,6 +4761,79 @@
       this.clearChoiceCooldown = 0;
     }
 
+    createPowerSnapshot() {
+      const p = this.player;
+      return {
+        level: this.level,
+        xp: this.xp,
+        xpToNext: this.xpToNext,
+        attributePity: this.attributePity,
+        attributeHistory: [...this.attributeHistory],
+        nextLevelBossLevel: this.nextLevelBossLevel,
+        player: {
+          maxHp: p.maxHp,
+          speed: p.speed,
+          katanaDamage: p.katanaDamage,
+          knockbackPower: p.knockbackPower,
+          criticalChance: p.criticalChance,
+          criticalMultiplier: p.criticalMultiplier,
+          criticalKnockbackMultiplier: p.criticalKnockbackMultiplier,
+          criticalDismemberChanceBonus: p.criticalDismemberChanceBonus,
+          attackInterval: p.attackInterval,
+          attributes: { ...p.attributes.levels },
+          katana: {
+            horizontalPixels: p.katana.horizontalPixels,
+            verticalPixels: p.katana.verticalPixels,
+            pierceLimit: p.katana.pierceLimit
+          }
+        }
+      };
+    }
+
+    restorePowerSnapshot(snapshot) {
+      if (!snapshot || !snapshot.player) return;
+      const p = this.player;
+      this.level = Math.max(1, snapshot.level || 1);
+      this.xp = Math.max(0, snapshot.xp || 0);
+      this.xpToNext = snapshot.xpToNext || calculateXpToNext(this.level);
+      this.attributePity = snapshot.attributePity || 0;
+      this.attributeHistory = Array.isArray(snapshot.attributeHistory) ? [...snapshot.attributeHistory] : [];
+      this.nextLevelBossLevel = Math.max(snapshot.nextLevelBossLevel || 10, Math.ceil(this.level / 10) * 10);
+
+      p.maxHp = snapshot.player.maxHp || p.maxHp;
+      p.hp = p.maxHp;
+      p.speed = snapshot.player.speed || p.speed;
+      p.katanaDamage = snapshot.player.katanaDamage || p.katanaDamage;
+      p.knockbackPower = snapshot.player.knockbackPower || p.knockbackPower;
+      p.criticalChance = snapshot.player.criticalChance || p.criticalChance;
+      p.criticalMultiplier = snapshot.player.criticalMultiplier || p.criticalMultiplier;
+      p.criticalKnockbackMultiplier = snapshot.player.criticalKnockbackMultiplier || p.criticalKnockbackMultiplier;
+      p.criticalDismemberChanceBonus = snapshot.player.criticalDismemberChanceBonus || p.criticalDismemberChanceBonus;
+      p.attackInterval = snapshot.player.attackInterval || p.attackInterval;
+      for (const id of ELEMENT_ITEMS) p.attributes.levels[id] = Math.max(0, snapshot.player.attributes[id] || 0);
+      p.elements = p.attributes.levels;
+      p.katana.horizontalPixels = snapshot.player.katana.horizontalPixels || p.katana.horizontalPixels;
+      p.katana.verticalPixels = snapshot.player.katana.verticalPixels || p.katana.verticalPixels;
+      p.katana.pierceLimit = snapshot.player.katana.pierceLimit || p.katana.pierceLimit;
+      p.katana.cooldown = Math.min(p.katana.cooldown, p.attackInterval);
+      p.katana.swingTime = 0;
+      p.katana.hitEnemies.clear();
+      p.katana.attackAreaCache = null;
+    }
+
+    startStrongNewGame() {
+      if (!this.gameOver) return;
+      const snapshot = this.createPowerSnapshot();
+      this.reset();
+      this.restorePowerSnapshot(snapshot);
+      this.notice = "強くてニューゲーム";
+      this.noticeTimer = 2.4;
+      this.guideDismissed = true;
+      this.startGrace = Math.max(this.startGrace, 2.4);
+      this.sfx.levelUp();
+      this.effects.push({ type: "enemyPower", x: this.player.x, y: this.player.y, life: 0.75, maxLife: 0.75, size: 68 });
+    }
+
     rebuildEnemyGrid() {
       if (!this.enemyGrid) this.enemyGrid = new SpatialGrid(96);
       this.enemyGrid.clear();
@@ -4639,10 +4893,12 @@
     loop(time) {
       const dt = Math.min(0.033, (time - this.lastTime) / 1000 || 0);
       this.lastTime = time;
+      this.unlockAudioFromKeyboard();
       if (this.gameOver || this.gameCleared) {
         this.processPointerInput();
         if (this.gameCleared) this.updateClear(dt);
         if (this.input.pressed("r")) this.reset();
+        if (this.gameOver && (this.input.pressed("enter") || this.input.pressed(" "))) this.startStrongNewGame();
       } else {
         this.update(dt);
       }
@@ -4952,6 +5208,7 @@
 
     continueToNextShape() {
       const previous = this.bloodGoal && this.bloodGoal.displayName();
+      const absorbedRewards = this.absorbFieldRewardsBeforeNextShape();
       this.continues += 1;
       this.gameCleared = false;
       this.showClearResult = false;
@@ -4975,8 +5232,54 @@
       this.player.hp = Math.min(this.player.maxHp, this.player.hp + Math.max(18, this.player.maxHp * 0.25));
       this.level += 2;
       this.nextLevelBossLevel = Math.max(this.nextLevelBossLevel, Math.ceil(this.level / 10) * 10);
-      this.notice = this.continues === 1 ? "次の血紋へ" : `第${this.continues + 1}血紋`;
+      const absorbedCount = absorbedRewards.orbs + absorbedRewards.items;
+      this.notice = absorbedCount > 0
+        ? `報酬吸収 ${absorbedCount}`
+        : this.continues === 1 ? "次の血紋へ" : `第${this.continues + 1}血紋`;
       this.noticeTimer = 2.0;
+    }
+
+    absorbFieldRewardsBeforeNextShape() {
+      let orbCount = 0;
+      let xpTotal = 0;
+      for (const orb of this.orbs) {
+        if (orb.absorbed === "collected") continue;
+        orb.absorbed = "collected";
+        orbCount += 1;
+        xpTotal += orb.value;
+      }
+      if (xpTotal > 0) {
+        this.runStats.xpOrbs += orbCount;
+        this.gainXp(xpTotal);
+      }
+
+      let itemCount = 0;
+      let attributeCount = 0;
+      let consumableCount = 0;
+      for (const item of this.items) {
+        if (item.absorbed === "collected") continue;
+        item.absorbed = "collected";
+        itemCount += 1;
+        this.runStats.items += 1;
+        if (item.kind === "heal") {
+          this.player.heal(22);
+        } else if (item.kind === "speed") {
+          this.player.addSpeed();
+        } else if (ELEMENT_ITEMS.includes(item.kind)) {
+          attributeCount += 1;
+          this.player.addElement(item.kind, this);
+        } else if (CONSUMABLE_ITEMS.includes(item.kind)) {
+          consumableCount += 1;
+          this.runStats.consumables += 1;
+        }
+      }
+
+      const total = orbCount + itemCount;
+      if (total > 0) {
+        this.sfx.queueAbsorb(Math.min(12, total), Math.max(4, this.player.attributes.get("absorb")));
+        this.sfx.item();
+      }
+      return { orbs: orbCount, xp: xpTotal, items: itemCount, attributes: attributeCount, consumables: consumableCount };
     }
 
     applyCriticalKillExplosion(originEnemy, dir) {
@@ -5501,6 +5804,10 @@
           this.drawBossBreakPopEffect(ctx, effect);
           continue;
         }
+        if (effect.type === "partBreakPop") {
+          this.drawPartBreakPopEffect(ctx, effect);
+          continue;
+        }
         const size = Math.round(effect.size * (effect.life / 0.16));
         rect(ctx, Math.round(effect.x) - size / 2, Math.round(effect.y) - size / 2, size, 1);
         rect(ctx, Math.round(effect.x) - size / 2, Math.round(effect.y) + size / 2, size, 1);
@@ -5574,6 +5881,20 @@
       ctx.fillText(effect.text, x - effect.text.length * 7, y);
       ctx.fillStyle = LIGHT_ORANGE;
       rect(ctx, x - 38, y + 27, Math.max(5, 76 * t), 3);
+      ctx.restore();
+    }
+
+    drawPartBreakPopEffect(ctx, effect) {
+      const t = clamp(effect.life / effect.maxLife, 0, 1);
+      const x = Math.round(effect.x);
+      const y = Math.round(effect.y - (1 - t) * 24);
+      ctx.save();
+      ctx.globalAlpha = clamp(t * 1.35, 0, 1);
+      ctx.fillStyle = ORANGE;
+      ctx.font = "13px Courier New, monospace";
+      ctx.fillText(effect.text, x - effect.text.length * 5, y);
+      ctx.fillStyle = LIGHT_ORANGE;
+      rect(ctx, x - 18, y + 18, Math.max(4, 36 * t), 2);
       ctx.restore();
     }
 
