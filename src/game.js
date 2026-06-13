@@ -469,6 +469,10 @@
       const ctx = this.ensureContext(allowCreate);
       if (!ctx) return;
       this.primeOutput();
+      if (playChime && this.pendingUnlockChime) {
+        this.pendingUnlockChime = false;
+        this.playUnlockChime(true);
+      }
       if (ctx.state === "running") {
         this.unlocked = true;
         if (this.pendingUnlockChime) {
@@ -539,7 +543,7 @@
     }
 
     playUnlockChime() {
-      if (this.unlockChimed || !this.context || this.context.state !== "running") return;
+      if (this.unlockChimed || !this.context) return;
       this.unlockChimed = true;
       this.playTone(660, 0.055, { type: "triangle", volume: 0.045, priority: true });
       this.playTone(990, 0.07, { type: "square", volume: 0.035, delay: 0.04, priority: true });
@@ -4610,7 +4614,10 @@
     }
 
     installAudioUnlockHandlers() {
-      const unlockWithChime = () => this.sfx.unlock(true, true);
+      const unlockWithChime = () => {
+        this.sfx.unlock(true, true);
+        if (!this.gameStarted && !this.gameOver && !this.gameCleared) this.startRequested = true;
+      };
       ["pointerdown", "touchstart", "mousedown"].forEach((type) => {
         this.canvas.addEventListener(type, unlockWithChime, { capture: true, passive: true });
       });
@@ -4648,6 +4655,10 @@
       const tap = this.input.consumePointerDown();
       if (tap) {
         this.sfx.unlock(true, false);
+        if (!this.gameStarted && !this.gameOver && !this.gameCleared) {
+          this.startRequested = true;
+          return;
+        }
         if (this.handleUiTap(tap.x, tap.y)) return;
         if (!this.gameOver && !this.gameCleared && tap.y >= this.playArea.top) {
           this.targetMovePoint = this.screenToWorld(tap.x, tap.y);
@@ -4655,6 +4666,7 @@
         }
       }
       const pointer = this.input.currentPointerPoint();
+      if (!this.gameStarted && !this.gameOver && !this.gameCleared) return;
       if (pointer && pointer.down && !this.gameOver && !this.gameCleared && pointer.y >= this.playArea.top) {
         this.sfx.unlock(false, false);
         this.targetMovePoint = this.screenToWorld(pointer.x, pointer.y);
@@ -4663,10 +4675,24 @@
     }
 
     unlockAudioFromKeyboard() {
-      if (this.sfx.unlocked) return;
       if (this.input.hasMovementKeys() || this.input.pressed("enter") || this.input.pressed(" ") || this.input.pressed("r")) {
+        if (!this.gameStarted && !this.gameOver && !this.gameCleared) this.startRequested = true;
+        if (this.sfx.unlocked) return;
         this.sfx.unlock(true, false);
       }
+    }
+
+    tryStartAfterAudioUnlock() {
+      if (this.gameStarted || this.gameOver || this.gameCleared || !this.startRequested) return;
+      if (!this.sfx.unlocked) return;
+      this.gameStarted = true;
+      this.startRequested = false;
+      this.guideDismissed = true;
+      this.guideTimer = 0;
+      this.startGrace = Math.max(this.startGrace, 2.2);
+      this.notice = "斬り込め";
+      this.noticeTimer = 1.2;
+      this.input.clear();
     }
 
     handleUiTap(x, y) {
@@ -4756,8 +4782,10 @@
       this.notice = "移動: WASD / 矢印";
       this.noticeTimer = 3;
       this.guideMaxTimer = 6;
-      this.guideTimer = this.guideMaxTimer;
-      this.guideDismissed = false;
+      this.gameStarted = !!(this.sfx && this.sfx.unlocked);
+      this.guideTimer = this.gameStarted ? 0 : this.guideMaxTimer;
+      this.guideDismissed = this.gameStarted;
+      this.startRequested = false;
       this.startGrace = 2.2;
       this.damageInvuln = 0;
       this.killPulse = 0;
@@ -4859,6 +4887,8 @@
       this.restorePowerSnapshot(snapshot);
       this.notice = "強くてニューゲーム";
       this.noticeTimer = 2.4;
+      this.gameStarted = true;
+      this.startRequested = false;
       this.guideDismissed = true;
       this.startGrace = Math.max(this.startGrace, 2.4);
       this.sfx.levelUp();
@@ -4925,6 +4955,7 @@
       const dt = Math.min(0.033, (time - this.lastTime) / 1000 || 0);
       this.lastTime = time;
       this.unlockAudioFromKeyboard();
+      this.tryStartAfterAudioUnlock();
       if (this.gameOver || this.gameCleared) {
         this.processPointerInput();
         if (this.gameCleared) this.updateClear(dt);
@@ -4939,6 +4970,15 @@
 
     update(dt) {
       this.processPointerInput();
+      this.tryStartAfterAudioUnlock();
+      if (!this.gameStarted) {
+        this.noticeTimer = Math.max(0, this.noticeTimer - dt);
+        this.killPulse = Math.max(0, this.killPulse - dt);
+        this.playerDamagePulse = Math.max(0, this.playerDamagePulse - dt);
+        this.effectManager.update(dt * 0.35);
+        this.sfx.update();
+        return;
+      }
       this.screenShake.update(dt);
       this.combo.update(dt, this);
       if (this.gameCleared) return;
