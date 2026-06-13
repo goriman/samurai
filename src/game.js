@@ -101,10 +101,10 @@
   };
   const COMBO_BLOOD_BONUS = {
     minHits: 5,
-    base: 2,
-    perHit: 0.35,
-    sqrt: 1.5,
-    max: 80
+    base: 4,
+    perHit: 0.48,
+    sqrt: 1.85,
+    max: 110
   };
   const BASE_PARTS = ["head", "body", "leftArm", "rightArm", "leftLeg", "rightLeg"];
   const WEAPON_PARTS = {
@@ -1597,14 +1597,14 @@
         ? 132 + Math.min(210, comboCount * 3)
         : 80 + (heavy ? 58 : 0) + (critical ? 42 : 0) + (boss ? 72 : 0);
       const maxCells = isComboBonus
-        ? Math.min(14, 4 + Math.floor(Math.sqrt(comboCount)) + Math.floor(comboBonusBlood / 14))
-        : boss ? 16 : heavy ? 9 : critical ? 7 : rare ? 6 : Math.max(2, 2 + Math.floor(Math.max(0, tier) / 2));
+        ? Math.min(18, 5 + Math.floor(Math.sqrt(comboCount)) + Math.floor(comboBonusBlood / 13))
+        : boss ? 22 : heavy ? 12 : critical ? 9 : rare ? 8 : Math.max(3, 3 + Math.floor(Math.max(0, tier) / 2));
       const bloodUnits = isComboBonus
         ? comboBonusBlood
-        : boss ? 52 + Math.max(0, tier) * 6 + (critical ? 24 : 0)
-          : heavy ? 18 + Math.max(0, tier) * 4 + (critical ? 8 : 0)
-            : rare ? 14 + Math.max(0, tier) * 3
-              : 2 + Math.max(0, tier) + (critical ? 4 : 0);
+        : boss ? 78 + Math.max(0, tier) * 9 + (critical ? 34 : 0)
+          : heavy ? 28 + Math.max(0, tier) * 5 + (critical ? 12 : 0)
+            : rare ? 22 + Math.max(0, tier) * 4 + (critical ? 10 : 0)
+              : 4 + Math.floor(Math.max(0, tier) * 1.5) + (critical ? 7 : 0);
       const candidates = [];
       const endgamePull = this.progressValue > 0.82;
       for (const cell of this.unfinished) {
@@ -1651,7 +1651,7 @@
     requiredForMark(mark) {
       if (mark === "H" || mark === "A") return 2;
       if (mark === "O" || mark === "S") return 3;
-      if (mark === "M") return 4;
+      if (mark === "M") return 3;
       return this.requiredFill;
     }
 
@@ -3986,10 +3986,12 @@
       ctx.fillStyle = LIGHT_ORANGE;
       rect(ctx, 0, UI_HEIGHT - 2, game.width, 2);
       if (game.width < 560) {
-        const attrSlot = 22;
-        const attrW = attrSlot * 5;
-        const attrX = Math.max(166, game.width - attrW - 8);
-        const statW = clamp(attrX - 26, 128, 220);
+        const minStatW = game.width < 340 ? 104 : 128;
+        const mobileRightPad = game.width < 430 ? 34 : 22;
+        const maxAttrW = 106;
+        const attrW = clamp(game.width - minStatW - mobileRightPad - 24, 88, maxAttrW);
+        const attrX = Math.max(8, game.width - attrW - mobileRightPad);
+        const statW = clamp(attrX - 24, 96, 220);
         this.drawHp(ctx, game, 16, 14, statW, 20);
         this.drawObjectiveCompact(ctx, game, 16, 42, statW);
         this.drawAttributesCompact(ctx, game, attrX, 12, attrW);
@@ -4638,23 +4640,40 @@
 
     drawAttributesCompact(ctx, game, x, y, availableW = 136) {
       const ids = ["fire", "ice", "lightning", "wind", "absorb"];
-      const maxRight = game.width - 6;
-      const slot = clamp(Math.floor(availableW / ids.length), 22, 27);
-      const box = Math.max(20, Math.min(24, slot - 3));
-      const scale = box <= 20 ? 0.42 : 0.5;
+      const safePad = game.width < 430 ? 28 : 14;
+      const maxRight = game.width - safePad;
+      const slot = Math.max(17, Math.floor(availableW / ids.length));
+      const box = clamp(slot - 2, 15, 24);
+      const scale = box <= 16 ? 0.32 : box <= 19 ? 0.38 : box <= 21 ? 0.44 : 0.5;
+      const glyphExtent = Math.ceil(16 * scale);
+      const visualLeftPad = Math.max(0, glyphExtent - box / 2);
+      const visualRightPad = visualLeftPad;
+      const groupW = (ids.length - 1) * slot + box + visualLeftPad + visualRightPad;
+      const startX = Math.max(safePad + visualLeftPad, Math.min(x, maxRight - groupW + visualLeftPad));
       for (let i = 0; i < ids.length; i += 1) {
-        const px = x + i * slot;
-        if (px + box > maxRight) break;
-        const id = ids[i];
-        const level = game.player.attributes.get(id);
-        const color = level > 0 ? attributeColor(id, "main") : LIGHT_ORANGE;
-        ctx.fillStyle = LIGHT_ORANGE;
-        this.drawFrame(ctx, px, y, box, 28, level >= 10 ? 2 : 1);
-        ctx.fillStyle = color;
-        drawAttributeGlyph(ctx, id, px + box / 2, y + 13, scale, level);
-        if (level > 0) {
-          rect(ctx, px + 5, y + 23, Math.min(box - 10, 2 + level), 2);
+        const px = Math.round(startX + i * slot);
+        if (px + box / 2 + glyphExtent > maxRight) {
+          const clampedX = Math.max(4, maxRight - box);
+          if (i !== ids.length - 1) continue;
+          this.drawCompactAttributeBox(ctx, game, ids[i], clampedX, y, box, scale);
+          break;
         }
+        const id = ids[i];
+        this.drawCompactAttributeBox(ctx, game, id, px, y, box, scale);
+      }
+    }
+
+    drawCompactAttributeBox(ctx, game, id, px, y, box, scale) {
+      const level = game.player.attributes.get(id);
+      const color = level > 0 ? attributeColor(id, "main") : LIGHT_ORANGE;
+      ctx.fillStyle = LIGHT_ORANGE;
+      this.drawFrame(ctx, px, y, box, 28, level >= 10 && box >= 18 ? 2 : 1);
+      ctx.fillStyle = color;
+      drawAttributeGlyph(ctx, id, px + box / 2, y + 13, scale, level);
+      if (level > 0) {
+        const pipX = px + Math.max(3, Math.floor(box * 0.2));
+        const pipW = Math.max(2, Math.min(box - (pipX - px) * 2, 2 + level));
+        rect(ctx, pipX, y + 23, pipW, 2);
       }
     }
 
@@ -4727,12 +4746,19 @@
 
     resize() {
       const dpr = RENDER_SCALE;
-      this.canvas.width = Math.floor(window.innerWidth * dpr);
-      this.canvas.height = Math.floor(window.innerHeight * dpr);
+      const viewport = window.visualViewport;
+      const widthCandidates = [window.innerWidth, document.documentElement.clientWidth, viewport?.width]
+        .filter((value) => Number.isFinite(value) && value > 0);
+      const heightCandidates = [window.innerHeight, document.documentElement.clientHeight, viewport?.height]
+        .filter((value) => Number.isFinite(value) && value > 0);
+      const cssWidth = Math.floor(Math.min(...widthCandidates));
+      const cssHeight = Math.floor(Math.min(...heightCandidates));
+      this.canvas.width = Math.floor(cssWidth * dpr);
+      this.canvas.height = Math.floor(cssHeight * dpr);
       this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       this.ctx.imageSmoothingEnabled = false;
-      this.width = window.innerWidth;
-      this.height = window.innerHeight;
+      this.width = cssWidth;
+      this.height = cssHeight;
       this.playArea = {
         left: 0,
         top: UI_HEIGHT,
