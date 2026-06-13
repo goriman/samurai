@@ -2612,10 +2612,12 @@
       this.absorbedThisSwing = 0;
       this.lastAttackDebug = null;
       this.hitEnemies = new Set();
+      this.lingerHitTimers = new Map();
       this.attackAreaCache = null;
     }
 
     update(dt, game) {
+      this.tickLingerHitTimers(dt);
       if (this.swingTime > 0) {
         this.swingTime -= dt;
         this.checkHits(game);
@@ -2630,6 +2632,10 @@
       }
 
       this.cooldown -= dt;
+      if (this.cooldown > 0) {
+        this.checkLingerHits(game);
+        return;
+      }
       if (this.cooldown <= 0) {
         this.aimDir = { x: 1, y: 0 };
         this.swingDir = { x: 1, y: 0 };
@@ -2640,9 +2646,18 @@
         this.hitsThisSwing = 0;
         this.absorbedThisSwing = 0;
         this.hitEnemies.clear();
+        this.lingerHitTimers.clear();
         this.attackAreaCache = null;
         game.sfx.swing();
         this.checkHits(game);
+      }
+    }
+
+    tickLingerHitTimers(dt) {
+      for (const [enemy, timer] of this.lingerHitTimers) {
+        const next = timer - dt;
+        if (next <= 0 || enemy.dead) this.lingerHitTimers.delete(enemy);
+        else this.lingerHitTimers.set(enemy, next);
       }
     }
 
@@ -2723,6 +2738,75 @@
       this.lastAttackDebug = { area, hitCount, absorbed: this.absorbedThisSwing, absorbCandidates: game.lastAbsorbCandidates, absorbLevel: game.player.attributes.get("absorb") };
     }
 
+    checkLingerHits(game) {
+      if (this.cooldown <= 0 || game.gameOver || game.gameCleared) return;
+      const blade = this.idleBlade();
+      const area = this.lingerAttackArea(blade);
+      let hitCount = 0;
+      const visitEnemy = (enemy) => {
+        if (hitCount >= this.lingerPierceLimit()) return false;
+        if (enemy.dead || this.lingerHitTimers.has(enemy)) return true;
+        const overlap = area.overlapsCircle(enemy.x, enemy.y, enemy.radius);
+        if (!overlap.hit) return true;
+        const hitSegment = overlap.segment || blade;
+        const critical = game.criticalSystem.rollKatana(this.player);
+        const damage = Math.max(1, Math.ceil(this.player.katanaDamage * 0.42 * critical.multiplier));
+        game.sfx.queueHit();
+        if (critical.isCritical) {
+          game.sfx.queueCritical();
+          game.runStats.criticalHits += 1;
+        }
+        game.effectManager.hit(enemy.x, enemy.y, hitSegment.dir, 3 + this.growthLevel());
+        if (critical.isCritical) game.effectManager.criticalHit(enemy.x, enemy.y, hitSegment.dir, area.width);
+        const result = enemy.takeDamage(damage, game, hitSegment.dir, {
+          sourceType: "katana_linger",
+          isCritical: critical.isCritical,
+          dismemberChanceBonus: critical.dismemberChanceBonus * 0.45,
+          hitPosition: { x: enemy.x, y: enemy.y }
+        });
+        const windBoost = 1 + game.player.attributes.get("wind") * 0.025;
+        enemy.applyKnockback(hitSegment.dir.x, hitSegment.dir.y, this.player.knockbackPower * 0.34 * windBoost * critical.knockbackMultiplier);
+        game.effects.push({
+          type: "slashHit",
+          x: enemy.x,
+          y: enemy.y,
+          life: 0.16,
+          maxLife: 0.16,
+          size: Math.min(area.width * 1.7, 24),
+          dir: { x: hitSegment.dir.x, y: hitSegment.dir.y },
+          startX: hitSegment.startX,
+          startY: hitSegment.startY,
+          tipX: hitSegment.tipX,
+          tipY: hitSegment.tipY,
+          width: area.width
+        });
+        if (critical.isCritical) {
+          game.requestHitStop(result && result.isKillingBlow ? 0.045 : 0.026);
+          game.screenShake.add(result && result.isKillingBlow ? 4 : 1.6, 0.08);
+        } else {
+          game.requestHitStop(0.012);
+        }
+        this.lingerHitTimers.set(enemy, this.lingerHitInterval());
+        hitCount += 1;
+        return hitCount < this.lingerPierceLimit();
+      };
+      if (game.enemyGrid) {
+        game.enemyGrid.forEachCircle(area.ownerX, area.ownerY, area.range + area.width + 32, visitEnemy);
+      } else {
+        for (const enemy of game.enemies) {
+          if (visitEnemy(enemy) === false) break;
+        }
+      }
+    }
+
+    lingerHitInterval() {
+      return clamp(this.player.attackInterval * 0.34, 0.18, 0.34);
+    }
+
+    lingerPierceLimit() {
+      return Math.max(1, Math.min(this.pierceLimit, 2 + Math.floor(this.growthLevel() / 5)));
+    }
+
     currentAttackArea(blade = this.currentBlade()) {
       const cache = this.attackAreaCache;
       if (cache
@@ -2757,6 +2841,11 @@
         area
       };
       return area;
+    }
+
+    lingerAttackArea(blade = this.idleBlade()) {
+      const lingerWidth = Math.max(this.hitWidth(), this.thickness() * 0.34);
+      return new AttackArea([blade], lingerWidth, this.player.x, this.player.y, blade.angle, this.range());
     }
 
     currentBlade() {
@@ -5014,6 +5103,7 @@
       p.katana.cooldown = Math.min(p.katana.cooldown, p.attackInterval);
       p.katana.swingTime = 0;
       p.katana.hitEnemies.clear();
+      p.katana.lingerHitTimers.clear();
       p.katana.attackAreaCache = null;
     }
 
