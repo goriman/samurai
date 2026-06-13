@@ -307,6 +307,7 @@
       this.pendingUnlockChime = false;
       this.resumePromise = null;
       this.resumeError = "";
+      this.primedOutput = false;
       this.lastPlayed = new Map();
       this.noiseBuffers = new Map();
       this.pending = {
@@ -467,6 +468,7 @@
       if (playChime) this.pendingUnlockChime = true;
       const ctx = this.ensureContext();
       if (!ctx) return;
+      this.primeOutput();
       if (ctx.state === "running") {
         this.unlocked = true;
         if (this.pendingUnlockChime) {
@@ -480,6 +482,7 @@
         .then(() => {
           this.unlocked = ctx.state === "running";
           this.resumeError = "";
+          if (this.unlocked) this.primeOutput();
           if (this.unlocked && this.pendingUnlockChime) {
             this.pendingUnlockChime = false;
             this.playUnlockChime();
@@ -514,6 +517,24 @@
         this.compressor.connect(this.context.destination);
       }
       return this.context;
+    }
+
+    primeOutput() {
+      if (this.primedOutput || !this.context || !this.masterGain) return;
+      try {
+        const buffer = this.context.createBuffer(1, 1, this.context.sampleRate);
+        const source = this.context.createBufferSource();
+        const gain = this.context.createGain();
+        gain.gain.value = 0.0001;
+        source.buffer = buffer;
+        source.connect(gain);
+        gain.connect(this.masterGain);
+        source.start(0);
+        source.stop(this.context.currentTime + 0.03);
+        this.primedOutput = true;
+      } catch (error) {
+        this.resumeError = error && error.message ? error.message : "prime failed";
+      }
     }
 
     playUnlockChime() {
@@ -3919,6 +3940,7 @@
       }
 
       if (!game.gameOver && !game.gameCleared) this.drawStartGuide(ctx, game);
+      if (!game.gameOver && !game.gameCleared) this.drawAudioUnlockPrompt(ctx, game);
       if (!game.gameOver && !game.gameCleared) this.drawKillPulse(ctx, game);
       if (!game.gameOver && !game.gameCleared) this.drawDamagePulse(ctx, game);
       const guideVisible = game.guideTimer > 0 && !game.guideDismissed;
@@ -4120,6 +4142,32 @@
       this.drawFrame(ctx, x, y, w, 34, 1);
       ctx.fillStyle = ORANGE;
       ctx.fillText(text, x + 16, y + 9);
+    }
+
+    drawAudioUnlockPrompt(ctx, game) {
+      if (!game.sfx || game.sfx.unlocked || !game.sfx.enabled || game.sfx.muted) return;
+      const compact = game.width < 560;
+      const text = compact ? "タップで音ON" : "画面をタップ / キー入力で音ON";
+      ctx.font = compact ? "14px Courier New, monospace" : "16px Courier New, monospace";
+      const w = Math.min(game.width - 32, Math.ceil(ctx.measureText(text).width) + 30);
+      const h = compact ? 28 : 32;
+      const x = Math.round((game.width - w) / 2);
+      const y = Math.max(UI_HEIGHT + 10, game.height - h - 18);
+      ctx.fillStyle = BLACK;
+      rect(ctx, x, y, w, h);
+      ctx.fillStyle = LIGHT_ORANGE;
+      this.drawFrame(ctx, x, y, w, h, 1);
+      if (Math.floor(performance.now() / 420) % 2 === 0) {
+        ctx.fillStyle = ORANGE;
+        rect(ctx, x + 9, y + Math.floor(h / 2) - 2, 4, 4);
+        rect(ctx, x + w - 13, y + Math.floor(h / 2) - 2, 4, 4);
+      }
+      ctx.fillStyle = ORANGE;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(text, x + w / 2, y + h / 2 + 1);
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
     }
 
     drawKillPulse(ctx, game) {
@@ -4577,6 +4625,7 @@
       this.input = new Input(canvas);
       this.ui = new UI();
       this.sfx = new SfxManager();
+      this.installAudioUnlockHandlers();
       this.criticalSystem = new CriticalSystem();
       this.gridLayer = null;
       this.resize();
@@ -4584,6 +4633,14 @@
       this.reset();
       this.lastTime = performance.now();
       requestAnimationFrame((time) => this.loop(time));
+    }
+
+    installAudioUnlockHandlers() {
+      const unlockWithChime = () => this.sfx.unlock(true);
+      ["pointerdown", "touchstart", "mousedown"].forEach((type) => {
+        this.canvas.addEventListener(type, unlockWithChime, { capture: true, passive: true });
+      });
+      window.addEventListener("keydown", unlockWithChime, { capture: true, passive: true });
     }
 
     resize() {
