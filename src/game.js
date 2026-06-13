@@ -972,6 +972,29 @@
       this.burst({ type: "attributeSpark", kind, x, y, dir, life: kind === "lightning" ? 0.12 : 0.18, maxLife: kind === "lightning" ? 0.12 : 0.18, size: 14 + Math.min(20, level * 2) });
     }
 
+    burnTick(x, y, radius = 10, remaining = 0) {
+      const main = attributeColor("fire", "main");
+      const sub = attributeColor("fire", "sub");
+      const count = Math.min(9, 4 + Math.floor(radius / 8));
+      for (let i = 0; i < count; i += 1) {
+        const angle = -Math.PI / 2 + (Math.random() - 0.5) * 1.4;
+        const speed = 38 + Math.random() * 84 + Math.min(26, remaining * 6);
+        const side = (Math.random() - 0.5) * radius * 4;
+        this.particle(
+          x + (Math.random() - 0.5) * radius * 0.8,
+          y + radius * 0.28,
+          Math.cos(angle) * speed + side,
+          Math.sin(angle) * speed,
+          0.18 + Math.random() * 0.14,
+          2 + (i % 3),
+          28,
+          4.5,
+          i % 3 === 0 ? sub : main
+        );
+      }
+      this.burst({ type: "burnTick", x, y, life: 0.2, maxLife: 0.2, size: 16 + Math.min(22, radius * 0.9) });
+    }
+
     kill(x, y, dir, combo, heavy, criticalKill = false) {
       const side = { x: -dir.y, y: dir.x };
       const boost = Math.min(1.85, 1 + combo * 0.06 + (heavy ? 0.35 : 0));
@@ -1142,6 +1165,13 @@
           dashedLinePixels(ctx, burst.x - size, burst.y - size * 0.55, burst.x - 4, burst.y - 2, 3, 6);
           dashedLinePixels(ctx, burst.x + size, burst.y + size * 0.55, burst.x + 4, burst.y + 2, 3, 6);
         }
+      } else if (burst.type === "burnTick") {
+        const size = burst.size * (0.35 + grow * 0.8);
+        ctx.fillStyle = attributeColor("fire", "main");
+        rect(ctx, burst.x - size * 0.45, burst.y - 2, size * 0.9, 4);
+        rect(ctx, burst.x - 2, burst.y - size * 0.7, 4, size * 1.1);
+        ctx.fillStyle = attributeColor("fire", "sub");
+        rect(ctx, burst.x - size * 0.22, burst.y - size * 0.42, Math.max(2, size * 0.44), 3);
       } else if (burst.type === "killBurst") {
         const size = burst.size * (0.4 + grow * 1.6);
         rect(ctx, burst.x - size, burst.y - 2, size * 2, 4);
@@ -3408,7 +3438,11 @@
         const beforeHp = this.hp;
         this.hp -= 2;
         game.recordDamage(Math.min(beforeHp, 2));
-        game.effects.push({ type: "fire", x: this.x, y: this.y, life: 0.32, maxLife: 0.32, size: 16 });
+        this.flash = Math.max(this.flash, 0.16);
+        game.sfx.queueElement("fire");
+        game.effectManager.burnTick(this.x, this.y, this.radius, this.burnTime);
+        game.effects.push({ type: "burnTick", x: this.x, y: this.y, life: 0.38, maxLife: 0.38, size: 18 + Math.min(18, this.radius * 0.55), damage: 2 });
+        game.effects.push({ type: "fire", x: this.x, y: this.y, life: 0.36, maxLife: 0.36, size: 20 + Math.min(18, this.radius * 0.45) });
         if (this.hp <= 0) {
           this.dead = true;
           const result = new DamageResult({ amount: 2, isCritical: false, isKillingBlow: true, didDismember: false, hitPosition: { x: this.x, y: this.y }, hitDirection: { x: 0, y: -1 }, sourceType: "fire", attributeType: "fire" });
@@ -3830,6 +3864,10 @@
       this.timer = 0;
       this.bossTimer = 24;
       this.spawned = 0;
+      this.swarmTimer = 34;
+      this.swarmActive = 0;
+      this.swarmRemaining = 0;
+      this.swarmSpawnTimer = 0;
     }
 
     update(dt, game) {
@@ -3844,15 +3882,16 @@
         game.sfx.boss();
       }
 
+      const profile = game.difficultyProfile();
+      this.swarmTimer -= dt;
+      if (this.swarmTimer <= 0 && this.swarmActive <= 0) this.startSwarm(game, profile);
+      if (this.updateSwarm(dt, game, profile)) return;
+
       this.timer -= dt;
       if (this.timer > 0) return;
       const isOpeningWave = this.spawned < 5 && game.elapsed < 7;
-      const profile = game.difficultyProfile();
       if (!isOpeningWave) {
-        let livingEnemies = 0;
-        for (const enemy of game.enemies) {
-          if (!enemy.dead) livingEnemies += 1;
-        }
+        const livingEnemies = this.livingCount(game);
         if (livingEnemies >= profile.maxEnemies) {
           this.timer = Math.max(this.timer, 0.3);
           return;
@@ -3865,6 +3904,102 @@
       const type = this.pickType(game);
       this.spawnEnemy(game, type, isOpeningWave);
       this.spawned += 1;
+    }
+
+    livingCount(game) {
+      let livingEnemies = 0;
+      for (const enemy of game.enemies) {
+        if (!enemy.dead) livingEnemies += 1;
+      }
+      return livingEnemies;
+    }
+
+    startSwarm(game, profile = game.difficultyProfile()) {
+      const threat = game.enemyThreatLevel ? game.enemyThreatLevel() : game.level;
+      const compactPenalty = Math.round(profile.compact * 4);
+      this.swarmActive = 5.2 + Math.min(3.2, threat / 26) + game.continues * 0.35;
+      this.swarmRemaining = clamp(Math.round(10 + threat * 0.34 + game.continues * 4 - compactPenalty), 10, 34);
+      this.swarmSpawnTimer = 0;
+      game.notice = "敵勢殺到";
+      game.noticeTimer = 1.6;
+      game.sfx.queueWall(1.15);
+      game.effects.push({
+        type: "objectivePop",
+        x: game.width / 2,
+        y: game.playArea.top + 72,
+        life: 1.1,
+        maxLife: 1.1,
+        text: "敵勢殺到",
+        strong: true
+      });
+      game.effects.push({
+        type: "enemyPower",
+        x: game.player.x,
+        y: game.player.y,
+        life: 0.62,
+        maxLife: 0.62,
+        size: 76
+      });
+    }
+
+    updateSwarm(dt, game, profile) {
+      if (this.swarmActive <= 0) return false;
+      this.swarmActive -= dt;
+      if (this.swarmActive <= 0) {
+        this.finishSwarm(game);
+        return false;
+      }
+      this.swarmSpawnTimer -= dt;
+      if (this.swarmSpawnTimer > 0) return true;
+
+      const livingEnemies = this.livingCount(game);
+      if (livingEnemies >= this.swarmMaxEnemies(game, profile)) {
+        this.swarmSpawnTimer = 0.16;
+        return true;
+      }
+
+      const canDouble = game.playArea.width >= 560 && this.swarmRemaining > 3 && Math.random() < 0.28;
+      const spawnCount = canDouble ? 2 : 1;
+      for (let i = 0; i < spawnCount && this.swarmRemaining > 0; i += 1) {
+        this.spawnEnemy(game, this.pickSwarmType(game), false);
+        this.spawned += 1;
+        this.swarmRemaining -= 1;
+      }
+      this.swarmSpawnTimer = this.swarmInterval(game);
+      if (this.swarmRemaining <= 0 || this.swarmActive <= 0) this.finishSwarm(game);
+      return true;
+    }
+
+    finishSwarm(game) {
+      const threat = game.enemyThreatLevel ? game.enemyThreatLevel() : game.level;
+      this.swarmActive = 0;
+      this.swarmRemaining = 0;
+      this.swarmSpawnTimer = 0;
+      this.swarmTimer = Math.max(24, 44 - Math.min(14, threat / 5) - game.continues * 3);
+    }
+
+    swarmInterval(game) {
+      const threat = game.enemyThreatLevel ? game.enemyThreatLevel() : game.level;
+      return Math.max(0.1, 0.19 - Math.min(0.055, threat * 0.0014) - game.continues * 0.008);
+    }
+
+    swarmMaxEnemies(game, profile) {
+      const threat = game.enemyThreatLevel ? game.enemyThreatLevel() : game.level;
+      return profile.maxEnemies + 8 + Math.min(18, Math.floor(threat / 9) + game.continues * 3);
+    }
+
+    pickSwarmType(game) {
+      const threat = game.enemyThreatLevel ? game.enemyThreatLevel() : game.level;
+      const roll = Math.random();
+      if (threat >= 50 && roll > 0.93) return "brute";
+      if (threat >= 42 && roll > 0.88) return "armor";
+      if (threat >= 34 && roll > 0.82) return "shield";
+      if (threat >= 28 && roll > 0.74) return "archer";
+      if (threat >= 22 && roll > 0.66) return "monk";
+      if (roll < 0.42) return "farmer";
+      if (roll < 0.60) return "scout";
+      if (roll < 0.78) return "spear";
+      return "sword";
     }
 
     spawnEnemy(game, type, nearPlayer = false) {
@@ -4679,7 +4814,7 @@
     }
 
     enemyDisplayLevel(game) {
-      return Math.max(0, game.level + Math.floor(game.runStats.kills / 18) + game.continues * 10);
+      return game.enemyThreatLevel ? game.enemyThreatLevel() : Math.max(0, game.level + Math.floor(game.runStats.kills / 18) + game.continues * 10);
     }
 
     drawMonsterFace(ctx, x, y, brutal) {
@@ -5148,9 +5283,13 @@
       };
     }
 
+    enemyThreatLevel() {
+      return Math.max(1, Math.floor(this.level + Math.floor(this.runStats.kills / 18) + this.continues * 10));
+    }
+
     enemyLevelForSpawn() {
       const profile = this.difficultyProfile();
-      return Math.max(1, Math.floor(this.level - profile.compact * 2));
+      return Math.max(1, Math.floor(this.enemyThreatLevel() - profile.compact * 2));
     }
 
     applyEnemyProfile(enemy, profile = this.difficultyProfile()) {
@@ -5563,6 +5702,9 @@
       this.bloodManager = new BloodManager();
       this.bloodGoal = new BloodCanvasGoal(this.playArea, previous);
       this.spawner = new EnemySpawner();
+      const profile = this.difficultyProfile();
+      this.spawner.bossTimer = Math.max(12, 24 + profile.bossDelay - this.continues * 3);
+      this.spawner.swarmTimer = Math.max(6, 14 - this.continues * 1.5);
       this.combo = new ComboManager();
       this.player.hp = Math.min(this.player.maxHp, this.player.hp + Math.max(18, this.player.maxHp * 0.25));
       this.level += 2;
@@ -6151,6 +6293,10 @@
           this.drawFireEffect(ctx, effect);
           continue;
         }
+        if (effect.type === "burnTick") {
+          this.drawBurnTickEffect(ctx, effect);
+          continue;
+        }
         if (effect.type === "ice") {
           this.drawIceEffect(ctx, effect);
           continue;
@@ -6460,6 +6606,29 @@
       ctx.fillStyle = attributeColor("fire", "sub");
       rect(ctx, x - 2, y - size * 0.35, 4, 5);
       rect(ctx, x - size * 0.35, y + size * 0.2, size * 0.7, 2);
+    }
+
+    drawBurnTickEffect(ctx, effect) {
+      const t = clamp(effect.life / effect.maxLife, 0, 1);
+      const grow = 1 - t;
+      const size = effect.size * (0.72 + grow * 0.35);
+      const x = effect.x;
+      const y = effect.y;
+      ctx.fillStyle = attributeColor("fire", "main");
+      rect(ctx, x - size * 0.5, y + size * 0.32, size, 3);
+      rect(ctx, x - size * 0.42, y - size * 0.1, 3, size * 0.42);
+      rect(ctx, x + size * 0.38, y - size * 0.16, 3, size * 0.46);
+      for (let i = 0; i < 4; i += 1) {
+        const px = x + (i - 1.5) * size * 0.2 + Math.sin(grow * 8 + i) * 3;
+        const py = y + size * 0.12 - i * size * 0.16 - grow * 12;
+        rect(ctx, px - 2, py - 2, 4, 6 + (i % 2) * 3);
+      }
+      ctx.fillStyle = attributeColor("fire", "sub");
+      rect(ctx, x - size * 0.25, y - size * 0.48 - grow * 8, size * 0.5, 3);
+      if (effect.damage && t > 0.25) {
+        ctx.font = "12px Courier New, monospace";
+        ctx.fillText(`-${effect.damage}`, x + size * 0.42, y - size * 0.7 - grow * 10);
+      }
     }
 
     drawIceEffect(ctx, effect) {
